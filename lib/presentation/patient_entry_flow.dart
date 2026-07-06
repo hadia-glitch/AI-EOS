@@ -136,8 +136,9 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
     final patient = _buildCurrentPatientParameters();
     final notifier = ref.read(patientsProvider.notifier);
+    final alreadyExists = notifier.state.any((p) => p.id == patient.id);
 
-    if (widget.existingPatient != null) {
+    if (alreadyExists) {
       await notifier.updatePatient(patient);
     } else {
       await notifier.addPatient(patient);

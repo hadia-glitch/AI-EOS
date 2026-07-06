@@ -81,3 +81,16 @@ class RagHealthResponse(BaseModel):
     embedding_model: str
     reranker_model: str
     vector_index: str
+
+
+class ConfigHealthResponse(BaseModel):
+    supabase_configured: bool
+    gemini_configured: bool
+    gemini_model: str
+    guidelines_dir: str
+    rag_status: str
+
+
+class MobileConfigResponse(BaseModel):
+    supabase_url: str
+    supabase_anon_key: str

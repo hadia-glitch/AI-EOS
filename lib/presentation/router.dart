@@ -15,9 +15,11 @@ final appRouter = GoRouter(
     GoRoute(path: '/home', builder: (_, __) => const HomeDashboard()),
     GoRoute(path: '/new-patient', builder: (_, __) => const NewPatientScreen()),
     GoRoute(path: '/admin/stewardship', builder: (_, __) => const StewardshipDashboardScreen()),
-    GoRoute(path: '/admin/users', builder: (_, __) => const UserManagementScreen()),
+    // User management is intentionally parked for now.
+    // GoRoute(path: '/admin/users', builder: (_, __) => const UserManagementScreen()),
     GoRoute(path: '/admin/guidelines', builder: (_, __) => const GuidelineConfigScreen()),
     GoRoute(path: '/admin/audit', builder: (_, __) => const AuditLogScreen()),
-    GoRoute(path: '/admin/settings', builder: (_, __) => const InstitutionSettingsScreen()),
+    // Institution settings is intentionally parked for now.
+    // GoRoute(path: '/admin/settings', builder: (_, __) => const InstitutionSettingsScreen()),
   ],
 );

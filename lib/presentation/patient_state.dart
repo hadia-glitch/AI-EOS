@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../data/auth_service.dart';
+import '../data/supabase_config.dart';
 import '../domain/eoscal_calculator.dart';
 
-// State provider for the active guideline (NICE, AAP, or WHO)
 final activeGuidelineProvider = StateNotifierProvider<ActiveGuidelineNotifier, String>((ref) {
   return ActiveGuidelineNotifier();
 });
@@ -28,10 +30,8 @@ class ActiveGuidelineNotifier extends StateNotifier<String> {
   }
 }
 
-// Search filter query provider
 final searchQueryProvider = StateProvider<String>((ref) => '');
 
-// Patients list provider
 final patientsProvider = StateNotifierProvider<PatientsNotifier, List<PatientParameters>>((ref) {
   return PatientsNotifier();
 });
@@ -41,124 +41,246 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
     _loadPatients();
   }
 
-  static const String _storageKey = 'patient_records';
+  String get _userId => AuthService.instance.currentUser?.id ?? 'anonymous';
+  String get _storageKey => 'patient_records_$_userId';
+  bool get _canUseSupabase => SupabaseConfig.isConfigured && AuthService.instance.isSignedIn;
+
+  // ─── Load ───────────────────────────────────────────────────────────────────
 
   Future<void> _loadPatients() async {
+    if (_canUseSupabase) {
+      try {
+        final rows = await AuthService.instance.client
+            .from('patient_records')
+            .select('payload')
+            .eq('owner_user_id', _userId)
+            .order('updated_at', ascending: false);
+        final patients = (rows as List<dynamic>)
+            .map((row) => _fromJson((row as Map<String, dynamic>)['payload'] as Map<String, dynamic>))
+            .toList();
+        state = patients;
+        await _saveLocal();
+        return;
+      } catch (_) {
+        await _loadLocal();
+        return;
+      }
+    }
+    await _loadLocal();
+  }
+
+  Future<void> refresh() => _loadPatients();
+
+  Future<void> _loadLocal() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final String? jsonString = prefs.getString(_storageKey);
       if (jsonString != null) {
         final List<dynamic> decodedList = jsonDecode(jsonString);
-        final patients = decodedList.map((json) => _fromJson(json)).toList();
-        state = patients;
+        state = decodedList.map((json) => _fromJson(json as Map<String, dynamic>)).toList();
       } else {
-        // Seed default dummy patients for demonstration if list is empty
-        _seedDemoPatients();
+        state = [];
       }
-    } catch (e) {
-      // Fallback if load fails
-      _seedDemoPatients();
+    } catch (_) {
+      state = [];
     }
   }
 
-  void _seedDemoPatients() {
-    final now = DateTime.now();
-    state = [
-      PatientParameters(
-        id: '1',
-        name: 'Baby Boy Smith',
-        mrn: 'MRN-2026-001',
-        gestationalAgeWeeks: 38.5,
-        birthDateTime: now.subtract(const Duration(hours: 14)),
-        maternalTemperature: 38.4,
-        romHours: 20.0,
-        gbsPositive: true,
-        adequateIntrapartumAntibiotics: false,
-        clinicalChorioamnionitis: false,
-        deliveryMode: 'Vaginal',
-        respiratoryDistress: 'Mild',
-        oxygenNeed: 'Supplemental',
-        apgar5Min: 6,
-        poorPerfusion: false,
-        neonatalTemperature: 36.8,
-        neurologicalStatus: 'Normal',
-        wbcCount: 4200,
-        itRatio: 0.22,
-        plateletCount: 150000,
-        crpLevel: 12.0,
-        pctLevel: 0.3,
-        bloodCulturePositive: false,
-      ),
-      PatientParameters(
-        id: '2',
-        name: 'Baby Girl Jones',
-        mrn: 'MRN-2026-002',
-        gestationalAgeWeeks: 34.2, // Premature warning
-        birthDateTime: now.subtract(const Duration(hours: 4)),
-        maternalTemperature: 37.2,
-        romHours: 6.0,
-        gbsPositive: false,
-        adequateIntrapartumAntibiotics: false,
-        clinicalChorioamnionitis: false,
-        deliveryMode: 'Caesarean',
-        respiratoryDistress: 'None',
-        oxygenNeed: 'None',
-        apgar5Min: 9,
-        poorPerfusion: false,
-        neonatalTemperature: 36.6,
-        neurologicalStatus: 'Normal',
-      ),
-      PatientParameters(
-        id: '3',
-        name: 'Baby Infant Doe',
-        mrn: 'MRN-2026-003',
-        gestationalAgeWeeks: 39.0,
-        birthDateTime: now.subtract(const Duration(hours: 26)),
-        maternalTemperature: 39.2, // Maternal High Fever
-        romHours: 26.0, // Prolonged ROM
-        gbsPositive: true,
-        adequateIntrapartumAntibiotics: false,
-        clinicalChorioamnionitis: true, // Chorio
-        deliveryMode: 'Vaginal',
-        respiratoryDistress: 'Severe', // Severe clinical distress
-        oxygenNeed: 'CPAP/Ventilation',
-        apgar5Min: 3, // Low APGAR
-        poorPerfusion: true, // Shock
-        neonatalTemperature: 35.8, // Hypothermia
-        neurologicalStatus: 'Seizures', // Seizures
-        wbcCount: 29000, // Elevated
-        itRatio: 0.31, // Elevated
-        plateletCount: 88000, // Thrombocytopenia
-        crpLevel: 45.0, // High CRP
-        pctLevel: 1.8,
-        bloodCulturePositive: true, // Culture positive
-      ),
-    ];
-    _savePatients();
-  }
+  // ─── Local persistence ───────────────────────────────────────────────────────
 
-  Future<void> _savePatients() async {
+  Future<void> _saveLocal() async {
     final prefs = await SharedPreferences.getInstance();
     final listJson = state.map((p) => _toJson(p)).toList();
     await prefs.setString(_storageKey, jsonEncode(listJson));
   }
 
+  // ─── Remote: patient_records (mobile cache) ──────────────────────────────────
+
+  Future<void> _upsertRemote(PatientParameters patient) async {
+    if (!_canUseSupabase) return;
+    await AuthService.instance.client.from('patient_records').upsert({
+      'id': patient.id,
+      'owner_user_id': _userId,
+      'encounter_ref': patient.mrn,
+      'payload': _toJson(patient),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  }
+
+  // ─── Remote: patient_encounters + clinical_assessments + risk_results ────────
+
+  List<Map<String, dynamic>> _computeAlerts(PatientParameters p) {
+    final List<Map<String, dynamic>> alerts = [];
+    final res = EoscalCalculator.calculate(p);
+
+    if (res.riskCategory == RiskCategory.critical || res.riskCategory == RiskCategory.high) {
+      alerts.add({
+        'type': 'risk',
+        'priority': res.riskCategory == RiskCategory.critical ? 'CRITICAL' : 'HIGH',
+        'message': 'Patient has a high EOSCAL score of ${res.totalScore}. Initiate clinical protocols.',
+      });
+    }
+    if (p.gestationalAgeWeeks < 35.0) {
+      alerts.add({
+        'type': 'preterm',
+        'priority': 'MEDIUM',
+        'message': 'Premature gestation (${p.gestationalAgeWeeks} weeks). Interpret calculations with caution.',
+      });
+    }
+    if (p.bloodCulturePositive == true) {
+      alerts.add({
+        'type': 'culture',
+        'priority': 'CRITICAL',
+        'message': 'CONFIRMED BACTEREMIA. Blood culture returned positive.',
+      });
+    }
+    return alerts;
+  }
+
+  /// Upserts a row in patient_encounters, inserts a new clinical_assessment,
+  /// inserts the EOSCAL risk_result, and syncs alerts. All non-fatal.
+  Future<void> _upsertClinicalTables(PatientParameters patient) async {
+    if (!_canUseSupabase) return;
+    final client = AuthService.instance.client;
+    final now = DateTime.now().toUtc().toIso8601String();
+
+    try {
+      // 1. patient_encounters — one row per patient (upsert on id)
+      await client.from('patient_encounters').upsert({
+        'id': patient.id,
+        'owner_user_id': _userId,
+        'encounter_ref': patient.mrn,
+        'patient_name': patient.name,
+        'birth_date_time': patient.birthDateTime.toIso8601String(),
+        'gestational_age_days': (patient.gestationalAgeWeeks * 7).round(),
+        'created_at': now,
+      });
+    } catch (e) {
+      debugPrint('patient_encounters upsert failed: $e');
+    }
+
+    String? assessmentId;
+    try {
+      // 2. clinical_assessments — new row per save (insert)
+      final assessmentRow = await client.from('clinical_assessments').insert({
+        'encounter_id': patient.id,
+        'event_type': 'initial',
+        'maternal_data': {
+          'maternal_temperature': patient.maternalTemperature,
+          'rom_hours': patient.romHours,
+          'gbs_positive': patient.gbsPositive,
+          'adequate_intrapartum_antibiotics': patient.adequateIntrapartumAntibiotics,
+          'clinical_chorioamnionitis': patient.clinicalChorioamnionitis,
+          'delivery_mode': patient.deliveryMode,
+        },
+        'neonatal_data': {
+          'respiratory_distress': patient.respiratoryDistress,
+          'oxygen_need': patient.oxygenNeed,
+          'apgar_5_min': patient.apgar5Min,
+          'poor_perfusion': patient.poorPerfusion,
+          'neonatal_temperature': patient.neonatalTemperature,
+          'neurological_status': patient.neurologicalStatus,
+          'gestational_age_weeks': patient.gestationalAgeWeeks,
+        },
+        'lab_data': {
+          if (patient.wbcCount != null) 'wbc_count': patient.wbcCount,
+          if (patient.itRatio != null) 'it_ratio': patient.itRatio,
+          if (patient.plateletCount != null) 'platelet_count': patient.plateletCount,
+          if (patient.crpLevel != null) 'crp_level': patient.crpLevel,
+          if (patient.pctLevel != null) 'pct_level': patient.pctLevel,
+          if (patient.bloodCulturePositive != null) 'blood_culture_positive': patient.bloodCulturePositive,
+        },
+        'created_at': now,
+      }).select('id').single();
+      assessmentId = assessmentRow['id'] as String?;
+    } catch (e) {
+      debugPrint('clinical_assessments insert failed: $e');
+    }
+
+    try {
+      // 3. risk_results — insert each time a score is computed on save
+      final result = EoscalCalculator.calculate(patient);
+      final drivers = result.allDrivers
+          .map((d) => {
+                'name': d.name,
+                'points': d.points,
+                'reason': d.reason,
+                'layer': d.layer,
+              })
+          .toList();
+
+      await client.from('risk_results').insert({
+        'encounter_id': patient.id,
+        if (assessmentId != null) 'assessment_id': assessmentId,
+        'layer1_score': result.layer1Score,
+        'layer2_score': result.layer2Score,
+        'layer3_score': result.layer3Score,
+        'combined_score': result.totalScore,
+        'probability_per_1000': result.probabilityPer1000,
+        'category': result.riskCategory.name.toUpperCase(),
+        'drivers': drivers,
+        'guideline_used': 'NICE',
+        'created_at': now,
+      });
+    } catch (e) {
+      debugPrint('risk_results insert failed: $e');
+    }
+
+    try {
+      // 4. alerts — sync active alerts (delete obsolete, insert current)
+      await client.from('alerts').delete().eq('encounter_id', patient.id);
+      final activeAlerts = _computeAlerts(patient);
+      for (final alert in activeAlerts) {
+        await client.from('alerts').insert({
+          'encounter_id': patient.id,
+          'alert_type': alert['type'],
+          'priority': alert['priority'],
+          'created_at': now,
+          'action_taken': alert['message'],
+        });
+      }
+    } catch (e) {
+      debugPrint('alerts sync failed: $e');
+    }
+  }
+
+  // ─── Public mutators ─────────────────────────────────────────────────────────
+
   Future<void> addPatient(PatientParameters patient) async {
-    state = [patient, ...state];
-    await _savePatients();
+    state = [patient, ...state.where((p) => p.id != patient.id)];
+    await _saveLocal();
+    await _upsertRemote(patient);
+    await _upsertClinicalTables(patient);
   }
 
   Future<void> updatePatient(PatientParameters patient) async {
     state = state.map((p) => p.id == patient.id ? patient : p).toList();
-    await _savePatients();
+    await _saveLocal();
+    await _upsertRemote(patient);
+    await _upsertClinicalTables(patient);
   }
 
   Future<void> deletePatient(String id) async {
     state = state.where((p) => p.id != id).toList();
-    await _savePatients();
+    await _saveLocal();
+    if (_canUseSupabase) {
+      final client = AuthService.instance.client;
+      try {
+        await client.from('patient_records').delete().eq('id', id).eq('owner_user_id', _userId);
+      } catch (e) {
+        debugPrint('patient_records delete failed: $e');
+      }
+      try {
+        // Cascades to clinical_assessments, risk_results via ON DELETE CASCADE
+        await client.from('patient_encounters').delete().eq('id', id).eq('owner_user_id', _userId);
+      } catch (e) {
+        debugPrint('patient_encounters delete failed: $e');
+      }
+    }
   }
 
-  // --- JSON Mappers ---
+  // ─── Serialisation ───────────────────────────────────────────────────────────
+
   Map<String, dynamic> _toJson(PatientParameters p) {
     return {
       'id': p.id,
@@ -189,11 +311,11 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
 
   PatientParameters _fromJson(Map<String, dynamic> json) {
     return PatientParameters(
-      id: json['id'],
-      name: json['name'],
-      mrn: json['mrn'],
+      id: json['id'] as String,
+      name: json['name'] as String,
+      mrn: json['mrn'] as String,
       gestationalAgeWeeks: (json['gestationalAgeWeeks'] as num).toDouble(),
-      birthDateTime: DateTime.parse(json['birthDateTime']),
+      birthDateTime: DateTime.parse(json['birthDateTime'] as String),
       maternalTemperature: (json['maternalTemperature'] as num).toDouble(),
       romHours: (json['romHours'] as num).toDouble(),
       gbsPositive: json['gbsPositive'] as bool,

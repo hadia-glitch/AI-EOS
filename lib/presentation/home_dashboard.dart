@@ -1,18 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 import '../core/theme.dart';
+import '../data/auth_service.dart';
+import '../data/supabase_config.dart';
 import '../domain/eoscal_calculator.dart';
 import '../data/guidelines_data.dart';
 import '../data/gemini_service.dart';
 import 'patient_state.dart';
 import 'screens/evidence_search_screen.dart';
-import 'screens/new_patient_screen.dart';
 import 'screens/patient_detail_screen.dart';
-import 'screens/admin_screens.dart';
-import 'patient_entry_flow.dart';
-import 'risk_results_screen.dart';
+import 'screens/explanation_screen.dart';
 
 class HomeDashboard extends ConsumerStatefulWidget {
   const HomeDashboard({super.key});
@@ -21,8 +20,19 @@ class HomeDashboard extends ConsumerStatefulWidget {
   ConsumerState<HomeDashboard> createState() => _HomeDashboardState();
 }
 
+
 class _HomeDashboardState extends ConsumerState<HomeDashboard> {
   int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresh patients from Supabase every time the dashboard is entered so
+    // a freshly-logged-in user sees their full patient list immediately.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(patientsProvider.notifier).refresh();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -49,9 +59,13 @@ class _HomeDashboardState extends ConsumerState<HomeDashboard> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            tooltip: 'Add Patient',
-            onPressed: () => context.push('/new-patient'),
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign out',
+            onPressed: () async {
+              await AuthService.instance.signOut();
+              if (!mounted) return;
+              this.context.go('/login');
+            },
           ),
         ],
       ),
@@ -60,6 +74,11 @@ class _HomeDashboardState extends ConsumerState<HomeDashboard> {
           index: _currentIndex,
           children: tabs,
         ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => context.push('/new-patient'),
+        icon: const Icon(Icons.add),
+        label: const Text('New Assessment'),
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
@@ -145,35 +164,17 @@ class DashboardTab extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Ward Overview',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Active Guidance: $activeGuideline Sepsis Engine',
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-                  ),
-                ],
+              Text(
+                'Ward Overview',
+                style: Theme.of(context).textTheme.headlineMedium,
               ),
-              ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => PatientEntryFlow()),
-                  );
-                },
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('New Assessment'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                ),
+              const SizedBox(height: 2),
+              Text(
+                'Active Guidance: $activeGuideline Sepsis Engine',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
               ),
             ],
           ),
@@ -253,7 +254,7 @@ class DashboardTab extends ConsumerWidget {
               : ListView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  itemCount: patients.length > 3 ? 3 : patients.length,
+                  itemCount: patients.length > 10 ? 10 : patients.length,
                   itemBuilder: (context, index) {
                     final patient = patients[index];
                     final result = EoscalCalculator.calculate(patient);
@@ -537,11 +538,16 @@ class _EvidenceTabState extends State<EvidenceTab> {
 // ==========================================
 // 4. ALERTS TAB
 // ==========================================
-class AlertsTab extends ConsumerWidget {
+class AlertsTab extends ConsumerStatefulWidget {
   const AlertsTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AlertsTab> createState() => _AlertsTabState();
+}
+
+class _AlertsTabState extends ConsumerState<AlertsTab> {
+  @override
+  Widget build(BuildContext context) {
     final patients = ref.watch(patientsProvider);
 
     final List<Map<String, dynamic>> activeAlerts = [];
@@ -832,11 +838,13 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                             } else {
                               await GeminiService.deleteApiKey();
                             }
+                            if (!mounted) return;
                             setState(() {
                               _isEditing = false;
                             });
-                            _loadKey();
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            await _loadKey();
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(this.context).showSnackBar(
                               const SnackBar(content: Text('API Key configuration updated.')),
                             );
                           },
@@ -878,11 +886,12 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                   title: const Text('Stewardship Dashboard'),
                   onTap: () => context.push('/admin/stewardship'),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.people_outline),
-                  title: const Text('User Management'),
-                  onTap: () => context.push('/admin/users'),
-                ),
+                // User management is intentionally parked for now.
+                // ListTile(
+                //   leading: const Icon(Icons.people_outline),
+                //   title: const Text('User Management'),
+                //   onTap: () => context.push('/admin/users'),
+                // ),
                 ListTile(
                   leading: const Icon(Icons.library_books_outlined),
                   title: const Text('Guideline Configuration'),
@@ -893,11 +902,12 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                   title: const Text('Audit Log'),
                   onTap: () => context.push('/admin/audit'),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.business),
-                  title: const Text('Institution Settings'),
-                  onTap: () => context.push('/admin/settings'),
-                ),
+                // Institution settings is intentionally parked for now.
+                // ListTile(
+                //   leading: const Icon(Icons.business),
+                //   title: const Text('Institution Settings'),
+                //   onTap: () => context.push('/admin/settings'),
+                // ),
               ],
             ),
           ),
@@ -926,6 +936,20 @@ class PatientListTile extends ConsumerWidget {
     required this.patient,
     required this.result,
   });
+
+  void _openExplanation(BuildContext context, WidgetRef ref) {
+    final guideline = ref.read(activeGuidelineProvider);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ExplanationScreen(
+          patient: patient,
+          result: result,
+          activeGuideline: guideline,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1012,7 +1036,7 @@ class PatientListTile extends ConsumerWidget {
                 ),
               ),
 
-              // Chevron and Risk Label
+              // Risk badge + AI star + chevron
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -1023,7 +1047,7 @@ class PatientListTile extends ConsumerWidget {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
-                      result.riskCategory.displayName.split(' ')[0], // just "Low", "Critical" etc
+                      result.riskCategory.displayName.split(' ')[0],
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -1031,7 +1055,38 @@ class PatientListTile extends ConsumerWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
+                  // AI explanation star button — tap to open explanation directly
+                  Tooltip(
+                    message: 'AI Clinical Explanation',
+                    child: InkWell(
+                      onTap: () => _openExplanation(context, ref),
+                      borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.auto_awesome,
+                              size: 16,
+                              color: riskColor,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              'AI',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: riskColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
                   const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
                 ],
               ),

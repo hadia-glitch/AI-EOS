@@ -13,7 +13,22 @@ class NewPatientScreen extends StatefulWidget {
 }
 
 class _NewPatientScreenState extends State<NewPatientScreen> {
+  // Short, human-readable reference shown in the UI (e.g. "A1B2C3D4").
+  // This is NOT the database primary key — see _patientId below.
   final _refController = TextEditingController(text: const Uuid().v4().substring(0, 8).toUpperCase());
+
+  // CRITICAL FIX: patient.id is written into patient_encounters.id and into
+  // the UUID foreign-key columns clinical_assessments.encounter_id,
+  // risk_results.encounter_id, and alerts.encounter_id. Those columns are
+  // real Postgres UUID columns — an 8-character truncated string like
+  // "A1B2C3D4" is not a valid UUID and every insert referencing it was
+  // failing silently (caught and only debugPrint'd as "non-fatal"). That is
+  // why patient_encounters/clinical_assessments/risk_results/alerts were
+  // never actually being populated. Generating a full v4 UUID here fixes it
+  // at the source, while the short reference above still shows up wherever
+  // the UI/mrn/encounter_ref is used.
+  final String _patientId = const Uuid().v4();
+
   DateTime _birthDateTime = DateTime.now();
   int _gaWeeks = 38;
   int _gaDays = 0;
@@ -87,7 +102,7 @@ class _NewPatientScreenState extends State<NewPatientScreen> {
           ElevatedButton(
             onPressed: () {
               final patient = PatientParameters(
-                id: _refController.text,
+                id: _patientId,
                 name: 'Patient ${_refController.text}',
                 mrn: 'MRN-${_refController.text}',
                 gestationalAgeWeeks: _gaTotal,

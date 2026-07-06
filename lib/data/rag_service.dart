@@ -1,115 +1,217 @@
 import '../domain/eoscal_calculator.dart';
 import 'guidelines_data.dart';
 
+/// Offline RAG service — keyword scoring with proper deduplication and ranking.
+///
+/// Scoring model:
+///   1. Term frequency: count of query terms present in chunk content/keywords.
+///   2. Guideline boost: ×2.5 multiplier if chunk matches the active guideline.
+///   3. Layer relevance: +1.5 if the chunk topic matches the patient's
+///      highest-scoring EOSCAL layer.
+///   4. Deduplication: each chunk ID returned at most once.
+///   5. Sorted descending by score; ties broken by source order.
 class RagService {
-  /// Searches for relevant guideline chunks based on patient parameters and active guideline.
   static List<GuidelineChunk> retrieveRelevantChunks({
     required PatientParameters patient,
     required EoscalResult result,
-    required String activeGuideline, // "NICE", "AAP", or "WHO"
-    int limit = 4,
+    required String activeGuideline,
+    int limit = 5,
   }) {
-    // Generate a set of query keywords based on patient parameters and findings
-    final Set<String> queryKeywords = {};
+    // ── Build query term set from patient state ──────────────────────────────
+    final terms = _buildQueryTerms(patient, result);
 
-    // Baseline/Demographics
-    if (patient.gestationalAgeWeeks < 37.0) {
-      queryKeywords.addAll(['preterm', 'premature', 'gestational']);
+    // ── Score every chunk ────────────────────────────────────────────────────
+    final scored = <_Scored>[];
+    final seen = <String>{};
+
+    for (final chunk in GuidelinesData.chunks) {
+      // Deduplicate
+      if (seen.contains(chunk.id)) continue;
+      seen.add(chunk.id);
+
+      double score = _scoreChunk(chunk, terms, activeGuideline, result);
+      if (score > 0) scored.add(_Scored(chunk, score));
     }
 
-    // Layer 1
+    // Sort descending
+    scored.sort((a, b) => b.score.compareTo(a.score));
+
+    // Return top N
+    if (scored.isEmpty) {
+      // Absolute fallback: return the first chunk for the active guideline,
+      // then fill with others — never return random order
+      final preferred = GuidelinesData.chunks
+          .where((c) => c.source.toUpperCase() == activeGuideline.toUpperCase())
+          .take(limit)
+          .toList();
+      final rest = GuidelinesData.chunks
+          .where((c) => c.source.toUpperCase() != activeGuideline.toUpperCase())
+          .take(limit - preferred.length)
+          .toList();
+      return [...preferred, ...rest].take(limit).toList();
+    }
+
+    return scored.take(limit).map((s) => s.chunk).toList();
+  }
+
+  // ── Query term builder ─────────────────────────────────────────────────────
+
+  static Set<String> _buildQueryTerms(
+      PatientParameters patient, EoscalResult result) {
+    final terms = <String>{};
+
+    // Layer 1: Maternal
     if (patient.maternalTemperature >= 38.0) {
-      queryKeywords.addAll(['fever', 'temperature', 'maternal']);
+      terms.addAll(['fever', 'temperature', 'maternal', 'intrapartum']);
     }
     if (patient.romHours >= 18) {
-      queryKeywords.addAll(['rom', 'rupture', 'membranes', 'prolonged']);
+      terms.addAll(['rom', 'rupture', 'membranes', 'prolonged', 'prom']);
     }
     if (patient.gbsPositive) {
-      queryKeywords.addAll(['gbs', 'streptococcus', 'antibiotics', 'prophylaxis', 'iap']);
+      terms.addAll(['gbs', 'streptococcus', 'prophylaxis', 'iap', 'penicillin']);
+    }
+    if (!patient.adequateIntrapartumAntibiotics && patient.gbsPositive) {
+      terms.addAll(['inadequate', 'antibiotics', 'prophylaxis']);
     }
     if (patient.clinicalChorioamnionitis) {
-      queryKeywords.addAll(['chorioamnionitis', 'fever', 'infection']);
+      terms.addAll(['chorioamnionitis', 'infection', 'fever']);
     }
 
-    // Layer 2
+    // Layer 2: Clinical
     if (patient.respiratoryDistress != 'None') {
-      queryKeywords.addAll(['respiratory', 'distress', 'breathing', 'tachypnea', 'grunting', 'retracting']);
+      terms.addAll(['respiratory', 'distress', 'breathing', 'tachypnea',
+          'grunting', 'retracting', 'cpap']);
     }
     if (patient.oxygenNeed != 'None') {
-      queryKeywords.addAll(['oxygen', 'cpap', 'ventilation', 'supportive']);
+      terms.addAll(['oxygen', 'ventilation', 'supportive', 'cpap']);
     }
     if (patient.apgar5Min <= 6) {
-      queryKeywords.addAll(['apgar', 'neonatal']);
+      terms.addAll(['apgar', 'resuscitation', 'depression']);
     }
     if (patient.poorPerfusion) {
-      queryKeywords.addAll(['perfusion', 'shock', 'blood pressure', 'refill']);
+      terms.addAll(['perfusion', 'shock', 'capillary', 'refill', 'hypotension']);
     }
-    if (patient.neonatalTemperature < 36.5 || patient.neonatalTemperature > 37.5) {
-      queryKeywords.addAll(['temperature', 'hypothermia', 'hyperthermia', 'thermal']);
+    if (patient.neonatalTemperature < 36.0) {
+      terms.addAll(['hypothermia', 'temperature', 'thermal']);
+    } else if (patient.neonatalTemperature > 38.0) {
+      terms.addAll(['hyperthermia', 'temperature', 'fever']);
     }
     if (patient.neurologicalStatus != 'Normal') {
-      queryKeywords.addAll(['lethargy', 'irritability', 'seizures', 'neurological', 'convulsions']);
+      terms.addAll(['lethargy', 'irritability', 'seizures', 'neurological']);
+    }
+    if (patient.gestationalAgeWeeks < 37.0) {
+      terms.addAll(['preterm', 'premature', 'gestational']);
     }
 
-    // Layer 3
+    // Layer 3: Lab
     if (patient.wbcCount != null) {
-      queryKeywords.addAll(['wbc', 'cbc', 'leukocyte', 'neutrophil']);
+      terms.addAll(['wbc', 'cbc', 'neutrophil', 'leukocyte']);
     }
-    if (patient.itRatio != null) {
-      queryKeywords.addAll(['it ratio', 'neutrophil', 'ratio']);
+    if (patient.itRatio != null && patient.itRatio! >= 0.2) {
+      terms.addAll(['it ratio', 'immature', 'neutrophil', 'ratio']);
     }
-    if (patient.plateletCount != null) {
-      queryKeywords.addAll(['platelet', 'thrombocytopenia']);
-    }
-    if (patient.crpLevel != null) {
-      queryKeywords.addAll(['crp', 'reactive protein', 'markers']);
+    if (patient.crpLevel != null && patient.crpLevel! >= 10) {
+      terms.addAll(['crp', 'reactive protein', 'inflammatory', 'markers']);
     }
     if (patient.pctLevel != null) {
-      queryKeywords.addAll(['pct', 'procalcitonin', 'markers']);
+      terms.addAll(['pct', 'procalcitonin', 'markers']);
     }
     if (patient.bloodCulturePositive == true) {
-      queryKeywords.addAll(['culture', 'blood culture', 'bacteremia', 'sepsis']);
+      terms.addAll(['culture', 'blood culture', 'bacteremia', 'positive']);
+    }
+    if (patient.plateletCount != null && patient.plateletCount! < 150000) {
+      terms.addAll(['platelet', 'thrombocytopenia']);
     }
 
-    // If total score is high, ensure treatment terms are included
-    if (result.totalScore >= 4) {
-      queryKeywords.addAll(['antibiotics', 'treatment', 'empiric', 'gentamicin', 'ampicillin', 'penicillin']);
+    // Always include treatment terms if any risk
+    final anyRisk = result.totalScore >= 2;
+    if (anyRisk) {
+      terms.addAll(['antibiotics', 'treatment', 'empiric', 'gentamicin', 'management']);
     }
 
-    // Score and rank each chunk
-    final List<MapEntry<GuidelineChunk, double>> scoredChunks = [];
+    // Monitoring always relevant
+    terms.addAll(['monitoring', 'observation', 'crp', 'culture']);
 
-    for (var chunk in GuidelinesData.chunks) {
-      double score = 0.0;
-
-      // 1. Keyword Overlap (TF-IDF light approximation)
-      for (var queryTerm in queryKeywords) {
-        for (var chunkKeyword in chunk.keywords) {
-          if (chunkKeyword.toLowerCase() == queryTerm.toLowerCase() ||
-              chunk.content.toLowerCase().contains(queryTerm.toLowerCase())) {
-            score += 1.0;
-          }
-        }
-      }
-
-      // 2. Active Guideline Boost (Highly prioritize the active guideline chosen by clinician)
-      if (chunk.source.toUpperCase() == activeGuideline.toUpperCase()) {
-        score *= 2.5; // Multiply match score if it corresponds to current active guideline
-        score += 2.0; // Give a baseline boost for matching the source
-      } else {
-        // Still allow matching other guidelines for comparative medical evidence, but rank lower
-        score *= 0.8;
-      }
-
-      if (score > 0.0) {
-        scoredChunks.add(MapEntry(chunk, score));
-      }
-    }
-
-    // Sort by descending score
-    scoredChunks.sort((a, b) => b.value.compareTo(a.value));
-
-    // Return the top N chunks
-    return scoredChunks.map((entry) => entry.key).take(limit).toList();
+    return terms;
   }
+
+  // ── Chunk scorer ──────────────────────────────────────────────────────────
+
+  static double _scoreChunk(
+    GuidelineChunk chunk,
+    Set<String> queryTerms,
+    String activeGuideline,
+    EoscalResult result,
+  ) {
+    double score = 0.0;
+    final contentLower = chunk.content.toLowerCase();
+    final keywordsLower = chunk.keywords.map((k) => k.toLowerCase()).toSet();
+
+    // Term frequency scoring
+    for (final term in queryTerms) {
+      final termLower = term.toLowerCase();
+      // Keyword exact match — higher weight
+      if (keywordsLower.contains(termLower)) {
+        score += 2.0;
+      } else if (contentLower.contains(termLower)) {
+        // Count occurrences but cap at 3 to avoid keyword stuffing bias
+        final count = _countOccurrences(contentLower, termLower).clamp(0, 3);
+        score += count * 0.8;
+      }
+    }
+
+    // Guideline boost
+    if (chunk.source.toUpperCase() == activeGuideline.toUpperCase()) {
+      score *= 2.5;
+    } else {
+      // Still useful — comparative evidence, but ranked lower
+      score *= 0.7;
+    }
+
+    // Layer relevance boost
+    if (result.layer1Score >= result.layer2Score &&
+        result.layer1Score >= result.layer3Score) {
+      // Maternal risk dominant
+      if (_chunkIsAbout(chunk, ['maternal', 'gbs', 'rom', 'fever', 'chorioamnionitis'])) {
+        score += 1.5;
+      }
+    } else if (result.layer2Score >= result.layer3Score) {
+      // Clinical signs dominant
+      if (_chunkIsAbout(chunk, ['respiratory', 'clinical', 'neonatal', 'signs', 'cpap'])) {
+        score += 1.5;
+      }
+    } else {
+      // Lab dominant
+      if (_chunkIsAbout(chunk, ['crp', 'wbc', 'culture', 'laboratory', 'markers'])) {
+        score += 1.5;
+      }
+    }
+
+    return score;
+  }
+
+  static int _countOccurrences(String text, String term) {
+    int count = 0;
+    int idx = 0;
+    while ((idx = text.indexOf(term, idx)) != -1) {
+      count++;
+      idx += term.length;
+    }
+    return count;
+  }
+
+  static bool _chunkIsAbout(GuidelineChunk chunk, List<String> topics) {
+    final contentLower = chunk.content.toLowerCase();
+    final sectionLower = chunk.section.toLowerCase();
+    return topics.any((t) =>
+        contentLower.contains(t) ||
+        sectionLower.contains(t) ||
+        chunk.keywords.any((k) => k.toLowerCase().contains(t)));
+  }
+}
+
+class _Scored {
+  final GuidelineChunk chunk;
+  final double score;
+  const _Scored(this.chunk, this.score);
 }

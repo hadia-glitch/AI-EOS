@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:eos/domain/eoscal_calculator.dart';
 import 'package:eos/data/rag_service.dart';
-import 'package:eos/data/guidelines_data.dart';
 
 void main() {
   group('EOSCAL 2024 Scoring Engine Tests', () {
