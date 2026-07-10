@@ -5,7 +5,7 @@ import '../domain/eoscal_calculator.dart';
 import 'patient_state.dart';
 import 'patient_entry_flow.dart';
 import 'screens/risk_results_tab.dart';
-import 'screens/explanation_screen.dart';
+import 'screens/care_plan_screen.dart';
 
 class RiskResultsScreen extends ConsumerStatefulWidget {
   final PatientParameters patient;
@@ -63,13 +63,13 @@ class _RiskResultsScreenState extends ConsumerState<RiskResultsScreen> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => ExplanationScreen(patient: patient, result: result, activeGuideline: guideline),
+              builder: (_) => CarePlanScreen(patient: patient, result: result, activeGuideline: guideline),
             ),
           );
         },
         backgroundColor: WhoTheme.secondaryTeal,
-        icon: const Icon(Icons.psychology),
-        label: const Text('AI Explanation'),
+        icon: const Icon(Icons.auto_awesome),
+        label: const Text('AI Care Plan'),
       ),
     );
   }

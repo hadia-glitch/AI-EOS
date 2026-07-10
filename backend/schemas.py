@@ -74,6 +74,43 @@ class ExplanationResponse(BaseModel):
     fallback_used: bool = False
 
 
+class AntibioticPlanSchema(BaseModel):
+    required: bool = False
+    urgency: str = "Within 1 hour"
+    regimen: list[str] = Field(default_factory=list)
+    duration: str = ""
+    stop_criteria: str = ""
+
+
+class CarePlanRequest(BaseModel):
+    risk_result: RiskPayload
+    active_guideline: str = "NICE"
+    # Chronological list of prior clinical_assessments + risk_results rows for
+    # this encounter, oldest first. Each item is a free-form dict mirroring
+    # the Supabase row shape (created_at, combined_score, category, ...).
+    # Used only to let the LLM narrate change over time in clinical_summary /
+    # trend_narrative — the trend chip shown in the UI is computed
+    # deterministically on the Flutter side from the same data, never by the LLM.
+    previous_assessments: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ClinicalCarePlanResponse(BaseModel):
+    clinical_summary: str
+    risk_analysis: str
+    trend_narrative: str = ""
+    driver_breakdown: str
+    recommended_actions: list[str]
+    antibiotic_plan: AntibioticPlanSchema
+    monitoring_plan: str
+    escalation_criteria: str
+    citation_list: list[CitationItem]
+    confidence_disclaimer: str
+    rag_chunks: list[EvidenceChunkResponse]
+    model_version: str
+    generated_offline: bool = False
+    fallback_used: bool = False
+
+
 class RagHealthResponse(BaseModel):
     status: str
     total_chunks: int

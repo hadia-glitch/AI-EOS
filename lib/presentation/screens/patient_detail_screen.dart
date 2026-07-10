@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme.dart';
 import '../../domain/eoscal_calculator.dart';
 import '../patient_entry_flow.dart';
-import 'explanation_screen.dart';
+import 'care_plan_screen.dart';
 import 'patient_timeline_screen.dart';
 import 'risk_results_tab.dart';
 import 'antibiotic_status_screen.dart';
@@ -57,7 +57,7 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> with SingleTi
             Tab(text: 'Overview'),
             Tab(text: 'Timeline'),
             Tab(text: 'Risk'),
-            Tab(text: 'Explanation'),
+            Tab(text: 'Care Plan'),
             Tab(text: 'Antibiotics'),
           ],
         ),
@@ -86,7 +86,12 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> with SingleTi
                 RiskResultsTab(patient: widget.patient, activeGuideline: widget.activeGuideline, compact: true),
                 PatientTimelineScreen(patient: widget.patient, result: result),
                 RiskResultsTab(patient: widget.patient, activeGuideline: widget.activeGuideline),
-                ExplanationScreen(patient: widget.patient, result: result, activeGuideline: widget.activeGuideline),
+                CarePlanScreen(
+                  patient: widget.patient,
+                  result: result,
+                  activeGuideline: widget.activeGuideline,
+                  embeddedInTab: true,
+                ),
                 AntibioticStatusScreen(patient: widget.patient, activeGuideline: widget.activeGuideline),
               ],
             ),

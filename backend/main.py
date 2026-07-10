@@ -14,6 +14,8 @@ from config import get_settings
 from rag.ingest import ingest_directory
 from rag.retrieve import get_chunk_store, get_rag_health, retrieve_evidence
 from schemas import (
+    CarePlanRequest,
+    ClinicalCarePlanResponse,
     EncounterEvidenceRequest,
     EvidenceChunkResponse,
     EvidenceSearchRequest,
@@ -26,6 +28,7 @@ from schemas import (
 from services.audit import log_audit_event
 from services.gemini_service import (
     generate_explanation,
+    generate_care_plan,
     generate_evidence_overview,
     generate_evidence_cards,
 )
@@ -37,6 +40,11 @@ class EvidenceAiRequest(BaseModel):
     query: str = Field(..., min_length=2)
     active_guideline: str = "NICE"
     chunks: list[dict[str, Any]] = Field(default_factory=list)
+    # Feature 2: optional de-identified snapshot of a clinician-selected
+    # patient, built client-side from EoscalCalculator. When present, the
+    # evidence AI overview/cards answer the query as it applies to this
+    # specific patient rather than generically.
+    patient_context: dict[str, Any] | None = None
 
 
 class EvidenceCardItem(BaseModel):
@@ -79,28 +87,6 @@ def _resolve_url(source_name: str) -> str:
         if key in upper:
             return url
     return ""
-
-
-# ── Gemini helpers for evidence AI ───────────────────────────────────────────
-
-def _gemini_evidence_overview(
-    query: str,
-    active_guideline: str,
-    chunks: list[dict],
-) -> str:
-    """Delegate to gemini_service which handles Gemini→Groq fallback."""
-    text, _ = generate_evidence_overview(query, active_guideline, chunks)
-    return text
-
-
-def _gemini_evidence_cards(
-    query: str,
-    active_guideline: str,
-    chunks: list[dict],
-) -> list[dict]:
-    """Delegate to gemini_service which handles Gemini→Groq fallback."""
-    cards, _ = generate_evidence_cards(query, active_guideline, chunks)
-    return cards
 
 
 def _fallback_cards(chunks: list[dict]) -> list[dict]:
@@ -230,10 +216,12 @@ def evidence_overview(body: EvidenceAiRequest):
     if not settings.gemini_api_key:
         return EvidenceOverviewResponse(overview="", generated_by_ai=False)
 
-    overview = _gemini_evidence_overview(body.query, body.active_guideline, chunks_dicts)
+    overview, generated = generate_evidence_overview(
+        body.query, body.active_guideline, chunks_dicts, patient_context=body.patient_context,
+    )
     return EvidenceOverviewResponse(
         overview=overview,
-        generated_by_ai=bool(overview),
+        generated_by_ai=generated,
     )
 
 
@@ -260,8 +248,9 @@ def evidence_cards(body: EvidenceAiRequest):
     generated_by_ai = False
 
     if settings.gemini_api_key:
-        ai_cards = _gemini_evidence_cards(body.query, body.active_guideline, chunks_dicts)
-        generated_by_ai = bool(ai_cards)
+        ai_cards, generated_by_ai = generate_evidence_cards(
+            body.query, body.active_guideline, chunks_dicts, patient_context=body.patient_context,
+        )
 
     if not ai_cards:
         ai_cards = _fallback_cards(chunks_dicts)
@@ -326,6 +315,41 @@ def encounter_explanation(encounter_id: str, body: EncounterEvidenceRequest):
     )
     return explanation
 
+
+# ── Care plan (Feature 1) ──────────────────────────────────────────────────────
+# Structured 7-section clinical care plan. Separate endpoint from
+# /explanation above so the legacy ExplanationScreen keeps working
+# unmodified while CarePlanScreen uses this richer response shape.
+
+@app.post("/api/v1/encounters/{encounter_id}/care-plan", response_model=ClinicalCarePlanResponse)
+def encounter_care_plan(encounter_id: str, body: CarePlanRequest):
+    payload = body.risk_result.model_dump()
+    chunks = retrieve_evidence(
+        risk_payload=payload,
+        active_guideline=body.active_guideline,
+    )
+    care_plan = generate_care_plan(
+        payload,
+        body.active_guideline,
+        chunks,
+        previous_assessments=body.previous_assessments,
+        query=f"EOS care plan {body.active_guideline} {payload.get('category', '')}",
+    )
+
+    log_audit_event(
+        action_type="LLM_CALL",
+        resource_id=encounter_id,
+        change_summary={
+            "category": payload.get("category"),
+            "score": payload.get("total_score"),
+            "previous_assessment_count": len(body.previous_assessments),
+            "endpoint": "care-plan",
+        },
+        rag_chunks_used=[c.to_dict() for c in chunks],
+        gemini_model_version=care_plan.model_version,
+        outcome="PARTIAL" if care_plan.fallback_used else "SUCCESS",
+    )
+    return care_plan
 
 
 # ── Gemini key diagnostic ─────────────────────────────────────────────────────

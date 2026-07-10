@@ -25,7 +25,13 @@ from groq import Groq
 from config import get_settings
 from db import get_supabase
 from rag.retrieve import EvidenceChunkResult
-from schemas import CitationItem, EvidenceChunkResponse, ExplanationResponse
+from schemas import (
+    AntibioticPlanSchema,
+    CitationItem,
+    ClinicalCarePlanResponse,
+    EvidenceChunkResponse,
+    ExplanationResponse,
+)
 
 
 # ── Disclaimers ───────────────────────────────────────────────────────────────
@@ -535,16 +541,555 @@ def _build_query_string(risk_payload: dict[str, Any], guideline: str) -> str:
     return " ".join(parts)[:300]
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Clinical Care Plan (Feature 1) — structured, 7-section, chronology-aware
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Separate pipeline from generate_explanation() above (kept for backward
+# compat with the legacy ExplanationScreen). Shares the same cache table
+# (llm_explanations) and Gemini->Groq->rule-based fallback chain, but its own
+# cache-key namespace ("careplan:" prefix) so old cached explanations never
+# collide with or get served in place of a care plan.
+
+_REGIMEN_MAP: dict[str, list[str]] = {
+    "NICE": [
+        "Benzylpenicillin 50 mg/kg IV every 12 hours (term neonate)",
+        "Gentamicin 5 mg/kg IV every 36 hours (term neonate)",
+        "Per NICE NG195 Section 1.4",
+    ],
+    "AAP": [
+        "Ampicillin 50 mg/kg IV every 12 hours",
+        "Gentamicin 4 mg/kg IV every 36 hours",
+        "Per AAP 2023 Clinical Report",
+    ],
+    "WHO": [
+        "Ampicillin 50 mg/kg IM/IV every 12 hours",
+        "Gentamicin 7.5 mg/kg IM/IV once daily",
+        "Per WHO Pocket Book of Hospital Care for Children",
+    ],
+}
+
+_URGENCY_MAP: dict[str, str] = {
+    "CRITICAL": "Immediate",
+    "HIGH": "Within 1 hour",
+    "INTERMEDIATE": "Within 4 hours",
+    "LOW": "Observe first",
+}
+
+
+def _make_care_plan_cache_key(risk_payload: dict[str, Any], active_guideline: str, previous_count: int) -> str:
+    return "careplan:" + _make_cache_key(risk_payload, active_guideline) + f":{previous_count}"
+
+
+def _summarize_trend(previous_assessments: list[dict[str, Any]]) -> str:
+    """
+    Deterministic textual summary of prior scores, given to the LLM as context
+    only -- the actual trend CHIP shown in the UI is computed independently in
+    Dart from the same underlying data, so it is correct even when this LLM
+    narrative is unavailable (rule-based fallback / offline).
+    """
+    if not previous_assessments:
+        return "No previous assessments on record -- this is the first evaluation."
+
+    lines = []
+    for a in previous_assessments[-5:]:
+        ts = a.get("created_at", "unknown time")
+        score = a.get("combined_score", a.get("score", "?"))
+        category = a.get("category", "?")
+        lines.append(f"- {ts}: score={score}, category={category}")
+    return "Chronological prior assessments (oldest first):\n" + "\n".join(lines)
+
+
+def _build_care_plan_prompt(
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    chunks: list[EvidenceChunkResult],
+    previous_assessments: list[dict[str, Any]],
+) -> str:
+    chunk_text = "\n\n".join(
+        f"[{c.chunk_id}] {c.source_name} - {c.section}:\n{c.chunk_text}"
+        for c in chunks
+    )
+    patient = risk_payload.get("patient", {})
+    if hasattr(patient, "model_dump"):
+        patient = patient.model_dump()
+    valid_ids = [c.chunk_id for c in chunks]
+    trend_block = _summarize_trend(previous_assessments)
+    category = str(risk_payload.get("category", risk_payload.get("risk_category", "")))
+
+    return f"""You are NeoGuard AI, a clinical care-plan generation engine for a neonatal early-onset \
+sepsis (EOS) decision support system. Your only role is to explain and operationalise decisions \
+already made by the deterministic EOSCAL rule engine -- you do NOT recalculate risk scores or make \
+independent clinical decisions. Your output must be understandable and directly actionable by ANY \
+hospital doctor on duty, not only a neonatologist: be explicit, avoid vague hedging like "consider" \
+where the guideline gives a clear instruction, and always state what to do if labs or results are \
+not yet available.
+
+ACTIVE GUIDELINE: {active_guideline}
+
+DE-IDENTIFIED PATIENT DATA (no PHI):
+- Gestational age (weeks): {patient.get('gestational_age_weeks', 'unknown')}
+- Maternal temperature: {patient.get('maternal_temperature', 'unknown')} degC
+- ROM hours: {patient.get('rom_hours', 'unknown')}
+- GBS positive: {patient.get('gbs_positive', 'unknown')}
+- Respiratory distress: {patient.get('respiratory_distress', 'unknown')}
+- CRP: {patient.get('crp_level', 'unknown')} mg/L
+- Blood culture positive: {patient.get('blood_culture_positive', 'unknown')}
+
+RISK RESULT (already calculated -- do NOT recalculate):
+- Category: {category}
+- Combined score: {risk_payload.get('total_score', risk_payload.get('combined_score'))}
+- Layer scores: L1={risk_payload.get('layer1_score')}, L2={risk_payload.get('layer2_score')}, L3={risk_payload.get('layer3_score')}
+- Probability per 1000 births: {risk_payload.get('probability_per_1000', 'N/A')}
+- Risk drivers: {json.dumps(risk_payload.get('drivers', []))}
+
+{trend_block}
+
+RETRIEVED GUIDELINE EVIDENCE (valid chunk IDs: {json.dumps(valid_ids)}):
+{chunk_text}
+
+INSTRUCTIONS -- produce all 7 sections:
+1. clinical_summary: 3-5 sentences giving a complete narrative of this patient's development --
+   what has changed, what is improving or worsening, and what today's assessment means. If prior
+   assessments exist, explicitly reference the trajectory over the last {len(previous_assessments)}
+   assessment(s). If this is the first assessment, say so plainly.
+2. risk_analysis: 2-3 sentences on why the layer scores combine to this category.
+3. trend_narrative: 1-2 sentences purely about the trend across assessments (empty string if only
+   one assessment exists).
+4. driver_breakdown: per-driver clinical significance, in plain language, citing the relevant
+   guideline chunk where possible.
+5. recommended_actions: numbered, concrete, sequential steps for the next 60 minutes. Each action
+   must be something a generalist doctor can literally do right now (e.g. "Draw 1-2 mL blood for
+   culture from two peripheral sites before the first antibiotic dose"), not a vague instruction.
+6. antibiotic_plan: required (bool), urgency (one of "Immediate"/"Within 1 hour"/"Within 4 hours"/
+   "Observe first"), regimen (list of drug+dose+route+frequency strings per {active_guideline}),
+   duration, stop_criteria.
+7. monitoring_plan: supplementary free-text monitoring guidance (the UI already renders a fixed
+   NICE NG195 monitoring table -- this text supplements it, do not repeat the table verbatim).
+8. escalation_criteria: supplementary free-text escalation guidance (the UI already renders a
+   fixed escalation trigger list -- this text supplements it).
+
+Every factual claim must trace to a retrieved chunk or to the risk result provided. Do not invent
+clinical facts, drug doses, or thresholds not present in the chunks or standard {active_guideline}
+practice.
+
+Respond with ONLY valid JSON -- no markdown fences, no preamble, no trailing text.
+Schema:
+{{
+  "clinical_summary": "<string>",
+  "risk_analysis": "<string>",
+  "trend_narrative": "<string>",
+  "driver_breakdown": "<string>",
+  "recommended_actions": ["<action 1>", "<action 2>"],
+  "antibiotic_plan": {{
+    "required": <bool>,
+    "urgency": "<string>",
+    "regimen": ["<drug + dose + route + frequency>"],
+    "duration": "<string>",
+    "stop_criteria": "<string>"
+  }},
+  "monitoring_plan": "<string>",
+  "escalation_criteria": "<string>",
+  "citation_list": [
+    {{"source": "<source_name>", "section": "<section>", "chunk_id": "<id from valid list>", "similarity_score": <float>}}
+  ],
+  "confidence_disclaimer": "{DISCLAIMER}"
+}}"""
+
+
+def _parse_care_plan_response(
+    raw: str,
+    chunks: list[EvidenceChunkResult],
+    model_version: str,
+    chunk_responses: list[EvidenceChunkResponse],
+) -> ClinicalCarePlanResponse:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.rsplit("```", 1)[0].strip()
+
+    data = json.loads(text)  # raises on failure -- caller falls back
+
+    valid_ids = {c.chunk_id for c in chunks}
+    citations: list[CitationItem] = []
+    for c in data.get("citation_list", []):
+        cid = c.get("chunk_id", "")
+        if cid and cid not in valid_ids:
+            continue
+        citations.append(CitationItem(
+            source=c.get("source", ""),
+            section=c.get("section", ""),
+            chunk_id=cid,
+            similarity_score=float(c.get("similarity_score", 0.0)),
+        ))
+    if not citations:
+        citations = [
+            CitationItem(source=c.source_name, section=c.section,
+                         chunk_id=c.chunk_id, similarity_score=c.similarity_score)
+            for c in chunks
+        ]
+
+    abx = data.get("antibiotic_plan", {}) or {}
+    antibiotic_plan = AntibioticPlanSchema(
+        required=bool(abx.get("required", False)),
+        urgency=str(abx.get("urgency", "Within 1 hour")),
+        regimen=[str(r) for r in abx.get("regimen", [])],
+        duration=str(abx.get("duration", "")),
+        stop_criteria=str(abx.get("stop_criteria", "")),
+    )
+
+    return ClinicalCarePlanResponse(
+        clinical_summary=data.get("clinical_summary", ""),
+        risk_analysis=data.get("risk_analysis", ""),
+        trend_narrative=data.get("trend_narrative", ""),
+        driver_breakdown=data.get("driver_breakdown", ""),
+        recommended_actions=[str(a) for a in data.get("recommended_actions", [])],
+        antibiotic_plan=antibiotic_plan,
+        monitoring_plan=data.get("monitoring_plan", ""),
+        escalation_criteria=data.get("escalation_criteria", ""),
+        citation_list=citations,
+        confidence_disclaimer=data.get("confidence_disclaimer", DISCLAIMER),
+        rag_chunks=chunk_responses,
+        model_version=model_version,
+        fallback_used=False,
+    )
+
+
+def _fallback_care_plan(
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    chunks: list[EvidenceChunkResult],
+    previous_assessments: list[dict[str, Any]],
+) -> ClinicalCarePlanResponse:
+    """Deterministic rule-based care plan. Explicitly NOT AI-generated."""
+    category = str(risk_payload.get("category", risk_payload.get("risk_category", "INTERMEDIATE")))
+    category_key = category.upper().replace(" ", "_")
+    score = risk_payload.get("total_score", risk_payload.get("combined_score", 0))
+    patient = risk_payload.get("patient", {})
+    if hasattr(patient, "model_dump"):
+        patient = patient.model_dump()
+
+    needs_antibiotics = (
+        (isinstance(score, (int, float)) and score >= 4)
+        or patient.get("blood_culture_positive") is True
+        or patient.get("respiratory_distress") == "Severe"
+    )
+
+    actions_map = {
+        "LOW": [
+            "Routine observation on postnatal ward.",
+            "Monitor vital signs every 12 hours for the first 24 hours.",
+            "Reassess if any clinical signs develop.",
+        ],
+        "INTERMEDIATE": [
+            "Enhanced monitoring every 4 hours.",
+            "Obtain blood culture and CRP at 18-24 hours.",
+            "Senior clinician review if clinical status deteriorates.",
+            "Review antibiotic decision at 36 hours based on culture and CRP.",
+        ],
+        "HIGH": [
+            "Obtain blood culture before antibiotics -- do not delay treatment.",
+            "Initiate empirical IV antibiotics within 1 hour per active guideline.",
+            "Senior neonatologist review within 1 hour.",
+            "Repeat CRP at 18-24 hours; review blood culture at 36-48 hours.",
+        ],
+        "CRITICAL": [
+            "Immediate IV antibiotics -- do not wait for culture results.",
+            "NICU admission and full sepsis workup.",
+            "Supportive care: perfusion, ventilation, thermal management.",
+            "Senior neonatologist within 30 minutes.",
+            "Urgent FBC, CRP, blood gas, and blood culture.",
+        ],
+    }
+    actions = actions_map.get("INTERMEDIATE", [])
+    for key, value in actions_map.items():
+        if key in category_key:
+            actions = value
+            break
+
+    trend = _summarize_trend(previous_assessments)
+    drivers_text = ", ".join(
+        d.get("name", "") for d in risk_payload.get("drivers", []) if isinstance(d, dict)
+    ) or "none identified"
+
+    antibiotic_plan = AntibioticPlanSchema(
+        required=needs_antibiotics,
+        urgency=_URGENCY_MAP.get(category_key, "Within 1 hour") if needs_antibiotics else "Not indicated",
+        regimen=_REGIMEN_MAP.get(active_guideline.upper(), _REGIMEN_MAP["NICE"]) if needs_antibiotics else [],
+        duration=(
+            "7-10 days (culture confirmed)" if patient.get("blood_culture_positive") is True
+            else "48-72 hours pending culture results"
+        ) if needs_antibiotics else "N/A",
+        stop_criteria=(
+            "Blood culture negative at 36-48 h AND clinically well AND CRP < 10 mg/L"
+            if needs_antibiotics else "N/A"
+        ),
+    )
+
+    citations = [
+        CitationItem(source=c.source_name, section=c.section,
+                     chunk_id=c.chunk_id, similarity_score=c.similarity_score)
+        for c in chunks
+    ]
+
+    return ClinicalCarePlanResponse(
+        clinical_summary=(
+            f"RULE-BASED SUMMARY (not AI-generated): This neonate has been assessed as "
+            f"{category} EOS risk with a total EOSCAL score of {score}. "
+            f"Active risk drivers: {drivers_text}. "
+            f"{trend} "
+            f"Recommendations below follow {active_guideline} protocol only."
+        ),
+        risk_analysis=(
+            f"Layer 1 (maternal) contributed {risk_payload.get('layer1_score', 0)} pts, "
+            f"Layer 2 (neonatal clinical) contributed {risk_payload.get('layer2_score', 0)} pts, "
+            f"Layer 3 (laboratory) contributed {risk_payload.get('layer3_score', 0)} pts."
+        ),
+        trend_narrative=trend if previous_assessments else "",
+        driver_breakdown=drivers_text,
+        recommended_actions=actions,
+        antibiotic_plan=antibiotic_plan,
+        monitoring_plan=(
+            f"Monitor vital signs (HR, RR, temperature, SpO2, perfusion) every "
+            f"{'1-2' if (isinstance(score, (int, float)) and score >= 7) else '4' if (isinstance(score, (int, float)) and score >= 4) else '12'} "
+            f"hours. Obtain CRP at 18-24 hours. Review blood culture at 36-48 hours."
+        ),
+        escalation_criteria=(
+            "Escalate to senior neonatologist if: RR > 70/min or increasing O2 need; "
+            "capillary refill > 3 s; positive blood culture; CRP > 10 mg/L at 18-24 h; "
+            "temperature instability; any clinical deterioration."
+        ),
+        citation_list=citations,
+        confidence_disclaimer=RULE_BASED_DISCLAIMER,
+        rag_chunks=[EvidenceChunkResponse(**c.to_dict()) for c in chunks],
+        model_version="rule-based-fallback",
+        fallback_used=True,
+    )
+
+
+def generate_care_plan(
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    chunks: list[EvidenceChunkResult],
+    previous_assessments: list[dict[str, Any]] | None = None,
+    query: str = "",
+) -> ClinicalCarePlanResponse:
+    settings = get_settings()
+    previous_assessments = previous_assessments or []
+    chunk_responses = [EvidenceChunkResponse(**c.to_dict()) for c in chunks]
+    cache_key = _make_care_plan_cache_key(risk_payload, active_guideline, len(previous_assessments))
+
+    # -- 1. Cache --
+    cached = _check_care_plan_cache(cache_key)
+    if cached is not None:
+        cached.rag_chunks = chunk_responses
+        _log_rag_query(query or "cached-careplan", active_guideline, chunks, method="cache")
+        return cached
+
+    _log_rag_query(
+        query or _build_query_string(risk_payload, active_guideline),
+        active_guideline, chunks,
+        method="hybrid" if chunks else "seed",
+    )
+
+    prompt = _build_care_plan_prompt(risk_payload, active_guideline, chunks, previous_assessments)
+
+    # -- 2. Try Gemini --
+    if settings.gemini_api_key:
+        try:
+            raw = _call_gemini(prompt, settings)
+            result = _parse_care_plan_response(raw, chunks, settings.gemini_model, chunk_responses)
+            _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
+                                    chunks, settings.gemini_model, is_simulated=False)
+            print("[Gemini] Care plan success")
+            return result
+        except Exception as e:
+            print(f"[Gemini] Care plan failed ({type(e).__name__}: {e}) -- trying Groq fallback")
+    else:
+        print("[LLM] No GEMINI_API_KEY -- skipping Gemini, trying Groq for care plan")
+
+    # -- 3. Try Groq --
+    if settings.groq_api_key:
+        try:
+            raw = _call_groq(prompt, settings)
+            result = _parse_care_plan_response(raw, chunks, settings.groq_model, chunk_responses)
+            _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
+                                    chunks, settings.groq_model, is_simulated=False)
+            print("[Groq] Care plan success")
+            return result
+        except Exception as e:
+            print(f"[Groq] Care plan failed ({type(e).__name__}: {e}) -- falling back to rule-based")
+    else:
+        print("[LLM] No GROQ_API_KEY -- skipping Groq for care plan")
+
+    # -- 4. Rule-based final fallback --
+    print("[LLM] Both Gemini and Groq unavailable -- using rule-based care plan fallback")
+    result = _fallback_care_plan(risk_payload, active_guideline, chunks, previous_assessments)
+    result.rag_chunks = chunk_responses
+    _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
+                            chunks, "rule-based-fallback", is_simulated=True)
+    return result
+
+
+def _check_care_plan_cache(cache_key: str) -> ClinicalCarePlanResponse | None:
+    try:
+        supabase = get_supabase()
+        now = datetime.now(timezone.utc).isoformat()
+        rows = (
+            supabase.table("llm_explanations")
+            .select("*")
+            .eq("cache_key", cache_key)
+            .or_(f"expires_at.is.null,expires_at.gt.{now}")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not rows.data:
+            return None
+
+        row = rows.data[0]
+        resp_json = row.get("response_json") or {}
+        is_simulated = row.get("is_simulated", False)
+        raw_citations = resp_json.get("citation_list", [])
+        citations = [
+            CitationItem(
+                source=c.get("source", ""), section=c.get("section", ""),
+                chunk_id=c.get("chunk_id", ""), similarity_score=float(c.get("similarity_score", 0.0)),
+            )
+            for c in raw_citations
+        ]
+        abx = resp_json.get("antibiotic_plan", {}) or {}
+        model_ver = row.get("gemini_model_version", "unknown")
+        print(f"[LLM] Care plan cache HIT key={cache_key} model={model_ver} simulated={is_simulated}")
+        return ClinicalCarePlanResponse(
+            clinical_summary=resp_json.get("clinical_summary", ""),
+            risk_analysis=resp_json.get("risk_analysis", ""),
+            trend_narrative=resp_json.get("trend_narrative", ""),
+            driver_breakdown=resp_json.get("driver_breakdown", ""),
+            recommended_actions=resp_json.get("recommended_actions", []),
+            antibiotic_plan=AntibioticPlanSchema(**abx) if abx else AntibioticPlanSchema(),
+            monitoring_plan=resp_json.get("monitoring_plan", ""),
+            escalation_criteria=resp_json.get("escalation_criteria", ""),
+            citation_list=citations,
+            confidence_disclaimer=resp_json.get(
+                "confidence_disclaimer", RULE_BASED_DISCLAIMER if is_simulated else DISCLAIMER,
+            ),
+            rag_chunks=[],
+            model_version=f"cached:{model_ver}",
+            fallback_used=is_simulated,
+        )
+    except Exception as e:
+        print(f"[LLM] Care plan cache check failed (non-fatal): {e}")
+        return None
+
+
+def _write_care_plan_cache(
+    cache_key: str,
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    result: ClinicalCarePlanResponse,
+    chunks: list[EvidenceChunkResult],
+    model_version: str,
+    is_simulated: bool,
+) -> None:
+    try:
+        supabase = get_supabase()
+        category = str(risk_payload.get("category", ""))
+        ttl_h = _CACHE_TTL_HOURS.get(category.upper(), 12)
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=ttl_h)).isoformat()
+
+        citations_json = [
+            {"source": c.source, "section": c.section,
+             "chunk_id": c.chunk_id, "similarity_score": c.similarity_score}
+            for c in chunks
+        ]
+        response_json = {
+            "clinical_summary":     result.clinical_summary,
+            "risk_analysis":        result.risk_analysis,
+            "trend_narrative":      result.trend_narrative,
+            "driver_breakdown":     result.driver_breakdown,
+            "recommended_actions":  result.recommended_actions,
+            "antibiotic_plan":      result.antibiotic_plan.model_dump(),
+            "monitoring_plan":      result.monitoring_plan,
+            "escalation_criteria":  result.escalation_criteria,
+            "citation_list":        citations_json,
+            "confidence_disclaimer": result.confidence_disclaimer,
+        }
+        patient = risk_payload.get("patient", {})
+        if hasattr(patient, "model_dump"):
+            patient = patient.model_dump()
+
+        supabase.table("llm_explanations").insert({
+            "cache_key":            cache_key,
+            "active_guideline":     active_guideline,
+            "is_simulated":         is_simulated,
+            "is_cached":            False,
+            "gemini_model_version": model_version,
+            "rag_chunks_used": [
+                {"chunk_id": c.chunk_id, "source": c.source_name,
+                 "section": c.section, "score": c.similarity_score}
+                for c in chunks
+            ],
+            "response_json":        response_json,
+            "clinical_summary":     result.clinical_summary,
+            "risk_analysis":        result.risk_analysis,
+            "driver_breakdown":     result.driver_breakdown,
+            "recommended_actions":  result.recommended_actions,
+            "antibiotic_plan":      result.antibiotic_plan.model_dump(),
+            "monitoring_plan":      result.monitoring_plan,
+            "escalation_criteria":  result.escalation_criteria,
+            "guideline_citations":  citations_json,
+            "patient_snapshot":     patient,
+            "eoscal_score":         risk_payload.get("total_score", risk_payload.get("combined_score")),
+            "risk_category":        category,
+            "expires_at":           expires_at,
+        }).execute()
+        print(f"[LLM] Care plan cached key={cache_key} ttl={ttl_h}h model={model_version} simulated={is_simulated}")
+    except Exception as e:
+        print(f"[LLM] Care plan cache write failed (non-fatal): {e}")
+
+
 # ── Evidence overview (for /api/v1/evidence/overview) ─────────────────────────
+
+def _build_patient_context_preamble(patient_context: dict | None) -> str:
+    """
+    Feature 2: when a clinician has selected a patient in the Evidence screen,
+    their de-identified clinical snapshot is prepended to the evidence-AI
+    prompt so overview/card answers apply to that specific patient rather
+    than being generic. Returns "" when no patient context is provided.
+    """
+    if not patient_context:
+        return ""
+    ctx = patient_context
+    drivers = ctx.get("active_drivers", [])
+    drivers_str = ", ".join(str(d) for d in drivers) if drivers else "none recorded"
+    return (
+        "PATIENT CONTEXT (answer the query as it applies to THIS specific patient, "
+        "not generically):\n"
+        f"- Gestational age: {ctx.get('gestational_age_weeks', 'unknown')} weeks\n"
+        f"- Current risk: {ctx.get('current_risk_category', 'unknown')} "
+        f"(score {ctx.get('current_eoscal_score', 'unknown')})\n"
+        f"- Active drivers: {drivers_str}\n"
+        f"- Latest CRP: {ctx.get('latest_crp', 'not measured')} mg/L\n"
+        f"- Blood culture: {ctx.get('blood_culture_status', 'pending')}\n"
+        f"- Age: {ctx.get('hours_of_life', 'unknown')} hours of life\n"
+        f"- Active guideline: {ctx.get('active_guideline', 'NICE')}\n\n"
+    )
+
 
 def generate_evidence_overview(
     query: str,
     active_guideline: str,
     chunks: list[dict],
+    patient_context: dict | None = None,
 ) -> tuple[str, bool]:
     """
     Returns (overview_text, generated_by_ai).
     Tries Gemini first, falls back to Groq, returns ('', False) if both fail.
+    When patient_context is provided (Feature 2), the overview answers the
+    query as it applies to that specific patient rather than generically.
     """
     if not chunks:
         return "", False
@@ -555,13 +1100,20 @@ def generate_evidence_overview(
         f"{c.get('chunk_text', c.get('content', ''))[:500]}"
         for c in chunks
     )
+    patient_preamble = _build_patient_context_preamble(patient_context)
+    personalised_instruction = (
+        'Answer specifically for the patient described in PATIENT CONTEXT above. '
+        if patient_preamble else ''
+    )
     prompt = (
         f'You are a neonatal sepsis clinical decision support assistant.\n'
+        f'{patient_preamble}'
         f'A clinician searched for: "{query}"\n'
         f'Active guideline: {active_guideline}\n\n'
         f'RETRIEVED GUIDELINE EVIDENCE:\n{chunk_context}\n\n'
         f'Write a concise 3-4 sentence clinical overview that directly answers the query, '
-        f'synthesising the evidence above. Be specific, cite sources by name (e.g. NICE NG195, '
+        f'synthesising the evidence above. {personalised_instruction}'
+        f'Be specific, cite sources by name (e.g. NICE NG195, '
         f'AAP 2023). Use clinical language. Do not add information not in the chunks. '
         f'Output plain text only — no markdown, no headers, no bullets.'
     )
@@ -608,10 +1160,13 @@ def generate_evidence_cards(
     query: str,
     active_guideline: str,
     chunks: list[dict],
+    patient_context: dict | None = None,
 ) -> tuple[list[dict], bool]:
     """
     Returns (cards_list, generated_by_ai).
     Tries Gemini first, falls back to Groq, returns ([], False) if both fail.
+    When patient_context is provided (Feature 2), each card's processed_answer
+    is written to apply to that specific patient rather than generically.
     """
     if not chunks:
         return [], False
@@ -627,15 +1182,23 @@ def generate_evidence_cards(
         for i, c in enumerate(chunks)
     ])
 
+    patient_preamble = _build_patient_context_preamble(patient_context)
+    personalised_instruction = (
+        'Where relevant, note how this applies to the patient in PATIENT CONTEXT above. '
+        if patient_preamble else ''
+    )
+
     prompt = (
         f'You are a neonatal sepsis clinical decision support assistant.\n'
+        f'{patient_preamble}'
         f'Clinician query: "{query}"\n'
         f'Active guideline: {active_guideline}\n\n'
         f'GUIDELINE CHUNKS:\n{chunk_list_json}\n\n'
         f'For EACH chunk produce a JSON object:\n'
         f'- "index": integer matching the chunk index\n'
         f'- "headline": one sentence (max 15 words) directly answering the query from this chunk\n'
-        f'- "processed_answer": 2-3 sentences explaining this chunk for the query in clinical language\n'
+        f'- "processed_answer": 2-3 sentences explaining this chunk for the query in clinical language. '
+        f'{personalised_instruction}\n'
         f'- "exact_excerpt": copy the single most relevant sentence verbatim from the chunk content\n\n'
         f'Respond ONLY with a valid JSON array of objects. No markdown, no preamble.'
     )

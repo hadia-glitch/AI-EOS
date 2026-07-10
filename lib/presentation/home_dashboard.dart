@@ -11,7 +11,7 @@ import '../data/gemini_service.dart';
 import 'patient_state.dart';
 import 'screens/evidence_search_screen.dart';
 import 'screens/patient_detail_screen.dart';
-import 'screens/explanation_screen.dart';
+import 'screens/care_plan_screen.dart';
 
 class HomeDashboard extends ConsumerStatefulWidget {
   const HomeDashboard({super.key});
@@ -942,7 +942,7 @@ class PatientListTile extends ConsumerWidget {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ExplanationScreen(
+        builder: (_) => CarePlanScreen(
           patient: patient,
           result: result,
           activeGuideline: guideline,
@@ -1058,7 +1058,7 @@ class PatientListTile extends ConsumerWidget {
                   const SizedBox(height: 4),
                   // AI explanation star button — tap to open explanation directly
                   Tooltip(
-                    message: 'AI Clinical Explanation',
+                    message: 'AI Care Plan',
                     child: InkWell(
                       onTap: () => _openExplanation(context, ref),
                       borderRadius: BorderRadius.circular(16),

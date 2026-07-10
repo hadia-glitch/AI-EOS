@@ -73,6 +73,39 @@ class AntibioticPlan {
       );
 }
 
+/// Structured 7-section clinical care plan (Feature 1). Parallel model to
+/// [StructuredExplanation] — kept separate rather than extending it so the
+/// legacy ExplanationScreen (kept for backward compat) is unaffected.
+class ClinicalCarePlan {
+  final String clinicalSummary;
+  final String riskAnalysis;
+  final String trendNarrative;
+  final String driverBreakdown;
+  final List<String> recommendedActions;
+  final AntibioticPlan antibioticPlan;
+  final String monitoringPlan;
+  final String escalationCriteria;
+  final List<String> guidelineCitations;
+  /// True = rule-based deterministic output, NOT AI-generated.
+  final bool isSimulated;
+  /// Human-readable source label shown in the status banner.
+  final String sourceLabel;
+
+  const ClinicalCarePlan({
+    required this.clinicalSummary,
+    required this.riskAnalysis,
+    required this.trendNarrative,
+    required this.driverBreakdown,
+    required this.recommendedActions,
+    required this.antibioticPlan,
+    required this.monitoringPlan,
+    required this.escalationCriteria,
+    required this.guidelineCitations,
+    this.isSimulated = false,
+    this.sourceLabel = '',
+  });
+}
+
 class EvidenceCardResult {
   final String headline;
   final String processedAnswer;

@@ -59,6 +59,7 @@ class EvidenceApi {
     required String query,
     required String activeGuideline,
     required List<RagChunk> chunks,
+    Map<String, dynamic>? patientContext,
   }) async {
     final backendAvailable = await _client.isBackendAvailable();
     if (!backendAvailable) return '';
@@ -77,6 +78,7 @@ class EvidenceApi {
                     'chunk_text': c.chunkText,
                   })
               .toList(),
+          if (patientContext != null) 'patient_context': patientContext,
         },
       );
       final data = response.data as Map<String, dynamic>;
@@ -94,6 +96,7 @@ class EvidenceApi {
     required String query,
     required String activeGuideline,
     required List<RagChunk> chunks,
+    Map<String, dynamic>? patientContext,
   }) async {
     final backendAvailable = await _client.isBackendAvailable();
     if (!backendAvailable) {
@@ -114,6 +117,7 @@ class EvidenceApi {
                     'chunk_text': c.chunkText,
                   })
               .toList(),
+          if (patientContext != null) 'patient_context': patientContext,
         },
       );
 

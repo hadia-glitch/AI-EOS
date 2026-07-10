@@ -8,6 +8,7 @@ import '../../core/widgets/source_badge.dart';
 import '../../data/api/evidence_api.dart';
 import '../../data/guidelines_data.dart';
 import '../../data/models/rag_chunk.dart';
+import '../../domain/eoscal_calculator.dart';
 import '../patient_state.dart';
 
 /// Screen 07 — Clinical Evidence Search
@@ -36,6 +37,11 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
   // true = backend has no Gemini key (cards are rule-based), false = AI cards
   bool _aiUnavailable = false;
   String? _lastQuery;
+
+  // Feature 2: patient context selector — when a patient is selected, their
+  // de-identified clinical snapshot is injected into both the RAG query and
+  // the AI overview/card prompts so answers apply to this specific patient.
+  PatientParameters? _selectedPatient;
 
   @override
   void dispose() {
@@ -83,15 +89,18 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
     if (chunks.isEmpty) return;
 
     // Step 2: fetch AI overview + cards from backend in parallel
+    final patientContext = _buildPatientContext(guideline);
     final overviewFuture = evidenceApi.fetchEvidenceOverview(
       query: query,
       activeGuideline: guideline,
       chunks: chunks,
+      patientContext: patientContext,
     );
     final cardsFuture = evidenceApi.fetchEvidenceCards(
       query: query,
       activeGuideline: guideline,
       chunks: chunks,
+      patientContext: patientContext,
     );
 
     final results = await Future.wait([overviewFuture, cardsFuture]);
@@ -117,6 +126,47 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
     setState(() {
       _filters.contains(source) ? _filters.remove(source) : _filters.add(source);
     });
+    if (_controller.text.trim().length >= 2) {
+      _lastQuery = null;
+      _search();
+    }
+  }
+
+  /// De-identified snapshot of the selected patient, computed entirely
+  /// locally via EoscalCalculator — no network call. Injected as
+  /// patient_context into the evidence AI overview/cards requests so the
+  /// LLM answers apply to this specific patient rather than generically.
+  Map<String, dynamic>? _buildPatientContext(String activeGuideline) {
+    final patient = _selectedPatient;
+    if (patient == null) return null;
+    final result = EoscalCalculator.calculate(patient);
+    final sortedDrivers = [...result.allDrivers]
+      ..sort((a, b) => b.contributionPercent.compareTo(a.contributionPercent));
+    final activeDrivers = sortedDrivers
+        .where((d) => d.points != 0)
+        .take(3)
+        .map((d) => d.name)
+        .toList();
+    final hoursOfLife = DateTime.now().difference(patient.birthDateTime).inHours;
+
+    return {
+      'gestational_age_weeks': patient.gestationalAgeWeeks,
+      'current_risk_category': result.riskCategory.displayName,
+      'current_eoscal_score': result.totalScore,
+      'active_drivers': activeDrivers,
+      'latest_crp': patient.crpLevel,
+      'blood_culture_status': patient.bloodCulturePositive == null
+          ? 'pending'
+          : (patient.bloodCulturePositive! ? 'positive' : 'negative'),
+      'hours_of_life': hoursOfLife,
+      'active_guideline': activeGuideline,
+    };
+  }
+
+  void _onPatientSelected(PatientParameters? patient) {
+    setState(() => _selectedPatient = patient);
+    // Re-run the current search (if any) so the new/removed patient context
+    // is reflected in the AI overview and cards immediately.
     if (_controller.text.trim().length >= 2) {
       _lastQuery = null;
       _search();
@@ -215,9 +265,72 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
               }).toList(),
             ),
           ),
+          const SizedBox(height: 10),
+          _buildPatientSelector(),
           const SizedBox(height: 4),
         ],
       ),
+    );
+  }
+
+  Widget _buildPatientSelector() {
+    final patients = ref.watch(patientsProvider);
+    final activeGuideline = ref.watch(activeGuidelineProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.person_outline, size: 16, color: Colors.grey.shade600),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String?>(
+                    isExpanded: true,
+                    isDense: true,
+                    value: _selectedPatient?.id,
+                    hint: const Text('No patient selected', style: TextStyle(fontSize: 13)),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('No patient selected', style: TextStyle(fontSize: 13)),
+                      ),
+                      ...patients.map(
+                        (p) => DropdownMenuItem<String?>(
+                          value: p.id,
+                          child: Text('${p.name} · ${p.mrn}',
+                              style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis),
+                        ),
+                      ),
+                    ],
+                    onChanged: (id) {
+                      final patient = id == null
+                          ? null
+                          : patients.cast<PatientParameters?>().firstWhere(
+                                (p) => p?.id == id,
+                                orElse: () => null,
+                              );
+                      _onPatientSelected(patient);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_selectedPatient != null) ...[
+          const SizedBox(height: 8),
+          _PatientContextStrip(patient: _selectedPatient!, activeGuideline: activeGuideline),
+        ],
+      ],
     );
   }
 
@@ -230,7 +343,10 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
         if (_loadingAi)
           _AiOverviewSkeleton()
         else if (_overview.isNotEmpty)
-          _AiOverviewCard(overview: _overview)
+          _AiOverviewCard(
+            overview: _overview,
+            personalizedFor: _selectedPatient?.mrn,
+          )
         // No overview and no AI → show nothing (backend has no key, that's ok)
         // We do NOT tell the user to "add an API key" — they can't and shouldn't
         ,
@@ -367,12 +483,83 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Patient context strip (Feature 2) — shown below the patient selector once
+// a patient is chosen. Purely local computation (EoscalCalculator), so it
+// renders identically online and offline.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PatientContextStrip extends StatelessWidget {
+  final PatientParameters patient;
+  final String activeGuideline;
+  const _PatientContextStrip({required this.patient, required this.activeGuideline});
+
+  @override
+  Widget build(BuildContext context) {
+    final result = EoscalCalculator.calculate(patient);
+    final riskColor = result.riskCategory.color;
+    final sortedDrivers = [...result.allDrivers]
+      ..sort((a, b) => b.contributionPercent.compareTo(a.contributionPercent));
+    final topDrivers = sortedDrivers.where((d) => d.points != 0).take(3).toList();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: riskColor.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: riskColor.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(color: riskColor, borderRadius: BorderRadius.circular(6)),
+            child: Text(
+              '${result.riskCategory.displayName.split(' ').first} · ${result.totalScore}',
+              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  topDrivers.isEmpty
+                      ? 'No active risk drivers'
+                      : topDrivers.map((d) => d.name).join(' · '),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    Icon(Icons.check_circle, size: 11, color: WhoTheme.secondaryTeal),
+                    const SizedBox(width: 4),
+                    Text('Patient context active',
+                        style: TextStyle(fontSize: 10, color: WhoTheme.secondaryTeal, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AI overview card
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _AiOverviewCard extends StatelessWidget {
   final String overview;
-  const _AiOverviewCard({required this.overview});
+  /// Feature 2: patient reference (mrn or name) when the overview was
+  /// generated with patient context — shows a "Personalised for X" tag.
+  final String? personalizedFor;
+  const _AiOverviewCard({required this.overview, this.personalizedFor});
 
   @override
   Widget build(BuildContext context) {
@@ -408,8 +595,31 @@ class _AiOverviewCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Text('From retrieved guidelines',
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+              Expanded(
+                child: Text('From retrieved guidelines',
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+              ),
+              if (personalizedFor != null) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: WhoTheme.secondaryTeal.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: WhoTheme.secondaryTeal.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.person, size: 10, color: WhoTheme.secondaryTeal),
+                      const SizedBox(width: 3),
+                      Text('Personalised for $personalizedFor',
+                          style: const TextStyle(
+                              fontSize: 10, color: WhoTheme.secondaryTeal, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 12),
