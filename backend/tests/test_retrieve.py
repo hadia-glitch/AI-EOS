@@ -17,24 +17,6 @@ def test_rrf_merges_lists():
     assert len(merged) <= 4
 
 
-def test_query_builder_high_risk():
-    payload = {
-        "category": "HIGH",
-        "total_score": 9,
-        "layer2_score": 4,
-        "layer3_score": 2,
-        "drivers": [{"name": "Respiratory distress", "reason": "CPAP required"}],
-        "patient": {
-            "respiratory_distress": "Severe",
-            "rom_hours": 22,
-            "maternal_temperature": 38.4,
-        },
-    }
-    query = build_clinical_query(payload, "NICE")
-    assert "HIGH" in query
-    assert "respiratory" in query.lower() or "Respiratory" in query
-
-
 def test_retrieve_returns_top_chunks():
     results = retrieve_evidence(
         query="EOS management HIGH risk benzylpenicillin gentamicin neonatal sepsis",

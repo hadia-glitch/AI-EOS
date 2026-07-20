@@ -1022,8 +1022,11 @@ def generate_care_plan(
         print(f"[LLM] All providers unavailable ({e}) -- using rule-based care plan fallback")
 
     # -- 4. Rule-based final fallback --
-    print("[LLM] Both Gemini and Groq unavailable -- using rule-based care plan fallback")
+    print("[LLM] All providers unavailable -- using rule-based care plan fallback")
     result = _fallback_care_plan(risk_payload, active_guideline, chunks, previous_assessments)
+    result, _ = _apply_deterministic_care_plan_checks(
+        result, risk_payload, chunks, active_guideline, deltas,
+    )
     result.rag_chunks = chunk_responses
     _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
                             chunks, "rule-based-fallback", is_simulated=True)

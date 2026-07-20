@@ -3,6 +3,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme.dart';
 import '../../domain/eoscal_calculator.dart';
+import '../../domain/trend_calculator.dart';
 import '../../data/auth_service.dart';
 import '../../data/supabase_config.dart';
 
@@ -19,6 +20,8 @@ class PatientTimelineScreen extends StatefulWidget {
 
 class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
   List<Map<String, dynamic>> _assessments = [];
+  List<Map<String, dynamic>> _deltaRows = [];
+  TrendResult _trendResult = TrendResult.none;
   bool _loading = true;
   String? _error;
 
@@ -86,17 +89,44 @@ class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
         });
       }
 
+      final deltaRows = await _fetchAssessmentDeltas(client);
+      final previousForTrend = items.length > 1
+          ? items.sublist(0, items.length - 1)
+          : <Map<String, dynamic>>[];
+      final latestDelta = deltaRows.isNotEmpty ? deltaRows.last : null;
+      final trendResult = TrendCalculator.compute(
+        previousAssessments: previousForTrend,
+        currentScore: widget.result.totalScore,
+        latestDeltaRow: latestDelta,
+      );
+
       if (items.isEmpty) {
         _loadLocalFallback();
       } else {
         setState(() {
           _assessments = items;
+          _deltaRows = deltaRows;
+          _trendResult = trendResult;
           _loading = false;
         });
       }
     } catch (e) {
       debugPrint('Error fetching timeline: $e');
       _loadLocalFallback();
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchAssessmentDeltas(dynamic client) async {
+    try {
+      final rows = await client
+          .from('assessment_deltas')
+          .select('crp_delta, temp_delta, score_delta, hours_since_last, created_at')
+          .eq('encounter_id', widget.patient.id)
+          .order('created_at', ascending: true);
+      return (rows as List<dynamic>).cast<Map<String, dynamic>>();
+    } catch (e) {
+      debugPrint('assessment_deltas query failed: $e');
+      return [];
     }
   }
 
@@ -134,8 +164,86 @@ class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
           'category': widget.result.riskCategory.name.toUpperCase(),
         }
       ];
+      _deltaRows = [];
+      _trendResult = TrendResult.none;
       _loading = false;
     });
+  }
+
+  String _trendLabel(ClinicalTrend trend) {
+    switch (trend) {
+      case ClinicalTrend.improving:
+        return 'Improving vs last assessment';
+      case ClinicalTrend.deteriorating:
+        return 'Deteriorating vs last assessment';
+      case ClinicalTrend.stable:
+        return 'Stable vs last assessment';
+      case ClinicalTrend.none:
+        return '';
+    }
+  }
+
+  Color _trendColor(ClinicalTrend trend) {
+    switch (trend) {
+      case ClinicalTrend.improving:
+        return WhoTheme.riskLow;
+      case ClinicalTrend.deteriorating:
+        return WhoTheme.riskCritical;
+      case ClinicalTrend.stable:
+        return WhoTheme.riskIntermediate;
+      case ClinicalTrend.none:
+        return Colors.grey;
+    }
+  }
+
+  Widget _buildTrendSummary() {
+    if (_trendResult.trend == ClinicalTrend.none) {
+      return const SizedBox.shrink();
+    }
+
+    final color = _trendColor(_trendResult.trend);
+    final deltas = <String>[];
+    if (_trendResult.crpDelta?.delta != null) {
+      final d = _trendResult.crpDelta!.delta!;
+      deltas.add('CRP ${d >= 0 ? '+' : ''}${d.toStringAsFixed(1)} mg/L');
+    }
+    if (_trendResult.tempDelta?.delta != null) {
+      final d = _trendResult.tempDelta!.delta!;
+      deltas.add('Temp ${d >= 0 ? '+' : ''}${d.toStringAsFixed(1)} °C');
+    }
+    if (_trendResult.scoreDelta?.delta != null) {
+      final d = _trendResult.scoreDelta!.delta!;
+      deltas.add('Score ${d >= 0 ? '+' : ''}${d.toStringAsFixed(0)}');
+    }
+    if (_trendResult.hoursSinceLast != null) {
+      deltas.add('${_trendResult.hoursSinceLast!.toStringAsFixed(1)} h since last');
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _trendLabel(_trendResult.trend),
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: color),
+          ),
+          if (deltas.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              deltas.join(' · '),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   void _showAssessmentDetail(Map<String, dynamic> assessment, int ageHours) {
@@ -296,6 +404,7 @@ class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
           style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
+        _buildTrendSummary(),
         // Chart container
         Container(
           height: 220,

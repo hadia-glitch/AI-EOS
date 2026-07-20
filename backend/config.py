@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # (http://localhost:11434/v1) or a production vLLM server
     # (http://<vllm-host>:8000/v1) both work without further code changes.
     # Master switch: true = use local Ollama/vLLM first; false = skip local,
-    # use Gemini/Groq cloud chain directly. Flip this single bool in .env.
+    # use Gemini/Groq cloud chain directly. Flip USE_LOCAL_LLM in .env.
     use_local_llm: bool = True
 
     local_llm_enabled: bool = True

@@ -239,9 +239,9 @@ def call_llm(
 
     if not chain:
         raise LLMUnavailableError(
-            "No LLM provider is enabled/configured. Set LOCAL_LLM_ENABLED=true "
-            "(and run Ollama/vLLM), or set GEMINI_API_KEY/GROQ_API_KEY and "
-            "DISABLE_CLOUD_LLM_FALLBACK=false."
+            "No LLM provider is enabled/configured. Set USE_LOCAL_LLM=true with "
+            "LOCAL_LLM_ENABLED=true (and run Ollama/vLLM), or set USE_LOCAL_LLM=false "
+            "with GEMINI_API_KEY/GROQ_API_KEY configured."
         )
 
     last_error: Exception | None = None

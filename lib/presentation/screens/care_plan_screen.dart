@@ -226,10 +226,6 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
     }
   }
 
-  _Trend _computeTrend(List<Map<String, dynamic>> previous, int currentScore) {
-    return _fromClinicalTrend(
-      TrendCalculator.computeScoreTrend(previous, currentScore),
-    );
   }
 
   void _retry() => setState(() {

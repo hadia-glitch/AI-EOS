@@ -6,6 +6,7 @@ import '../data/auth_service.dart';
 import '../data/local_draft_service.dart';
 import '../data/supabase_config.dart';
 import '../domain/eoscal_calculator.dart';
+import '../domain/trend_calculator.dart';
 
 final activeGuidelineProvider = StateNotifierProvider<ActiveGuidelineNotifier, String>((ref) {
   return ActiveGuidelineNotifier();
@@ -195,32 +196,20 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
       });
     }
 
-    if (recentDeltas.length >= 2) {
-      final lastTwo = recentDeltas.sublist(recentDeltas.length - 2);
-      final crpRising = lastTwo.every((d) {
-        final delta = d['crp_delta'];
-        return delta != null && (delta as num) > 0;
+    if (TrendCalculator.hasCrpRisingTrend(recentDeltas)) {
+      alerts.add({
+        'type': 'CRP_RISING_TREND',
+        'priority': 'HIGH',
+        'message': 'CRP rising across consecutive assessments — review inflammatory trend.',
       });
-      if (crpRising) {
-        alerts.add({
-          'type': 'CRP_RISING_TREND',
-          'priority': 'HIGH',
-          'message': 'CRP rising across consecutive assessments — review inflammatory trend.',
-        });
-      }
+    }
 
-      const tempThreshold = 0.5;
-      final tempUnstable = lastTwo.every((d) {
-        final delta = d['temp_delta'];
-        return delta != null && (delta as num).abs() >= tempThreshold;
+    if (TrendCalculator.hasTempInstabilityTrend(recentDeltas)) {
+      alerts.add({
+        'type': 'TEMP_INSTABILITY_TREND',
+        'priority': 'MEDIUM',
+        'message': 'Temperature instability across consecutive assessments — monitor closely.',
       });
-      if (tempUnstable) {
-        alerts.add({
-          'type': 'TEMP_INSTABILITY_TREND',
-          'priority': 'MEDIUM',
-          'message': 'Temperature instability across consecutive assessments — monitor closely.',
-        });
-      }
     }
 
     return alerts;
