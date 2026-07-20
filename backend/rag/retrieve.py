@@ -22,6 +22,7 @@ from sentence_transformers import CrossEncoder
 
 from config import get_settings
 from db import get_supabase
+from rag.clinical_terms import expand_query
 from rag.query_builder import build_clinical_query
 from rag.rrf import reciprocal_rank_fusion
 
@@ -67,6 +68,7 @@ class EvidenceChunkResult:
     version: str
     chunk_index: int | None = None
     page_number: int | None = None
+    file_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -139,7 +141,7 @@ class ChunkStore:
         for chunk in self.chunks:
             emb = chunk.get("embedding")
             if emb is None:
-                vectors.append(np.zeros(384, dtype=np.float32))
+                vectors.append(np.zeros(get_settings().embedding_dim, dtype=np.float32))
             elif isinstance(emb, str):
                 parsed = [float(x) for x in emb.strip("[]").split(",") if x.strip()]
                 vectors.append(np.array(parsed, dtype=np.float32))
@@ -208,6 +210,7 @@ def _to_result(chunk: dict, score: float) -> EvidenceChunkResult:
         version=chunk.get("version", "1.0"),
         chunk_index=chunk.get("chunk_index"),
         page_number=chunk.get("page_number"),
+        file_name=meta.get("file_name", ""),
     )
 
 
@@ -238,11 +241,33 @@ def retrieve_evidence(
 
     print(f"[Retrieval] Query: '{query[:100]}' guideline={active_guideline} store={len(store.chunks)} chunks")
 
-    embed_model = get_embed_model()
+    # get_embed_model()/get_reranker() download from HuggingFace Hub on their
+    # first call in this process (cached forever after via @lru_cache — but
+    # NOT cached if they raise). If the backend machine has no internet at
+    # that exact moment (e.g. testing offline mode with a freshly-restarted
+    # backend, before either model has ever loaded), this used to raise
+    # uncaught all the way up to main.py and 500 the whole request — even
+    # though the chunk store itself was already loaded and usable. Treat a
+    # model-load failure the same as "no chunks": fall back to seed data
+    # rather than crash the request.
+    try:
+        embed_model = get_embed_model()
+    except Exception as e:
+        print(f"[Retrieval] Embedding model unavailable ({e}) — seed fallback")
+        return _fallback_chunks(query, active_guideline, top_k or settings.rerank_top_k)
+
     retrieve_k = settings.retrieval_top_k
 
+    # Semantic search uses the query as written — embeddings already capture
+    # meaning-level similarity, so synonym-stuffing here would just dilute
+    # the vector. BM25 is pure keyword overlap, so it's expanded with
+    # same-concept clinical terms (see rag/clinical_terms.py) to catch the
+    # "newborn blood infection" vs "early-onset neonatal sepsis" mismatch
+    # that keyword search alone would miss.
+    bm25_query = expand_query(query)
+
     semantic_hits = store.semantic_search(query, embed_model, top_k=retrieve_k)
-    bm25_hits = store.bm25_search(query, top_k=retrieve_k)
+    bm25_hits = store.bm25_search(bm25_query, top_k=retrieve_k)
 
     merged = reciprocal_rank_fusion(
         [[c for c, _ in semantic_hits], [c for c, _ in bm25_hits]],
@@ -264,16 +289,114 @@ def retrieve_evidence(
             candidates.append(item)
 
     # Rerank
-    reranker = get_reranker()
-    pairs = [(query, c.get("chunk_text", "")) for c in candidates]
-    rerank_scores = reranker.predict(pairs)
+    try:
+        reranker = get_reranker()
+        pairs = [(query, c.get("chunk_text", "")) for c in candidates]
+        rerank_scores = [float(s) for s in reranker.predict(pairs)]
+    except Exception as e:
+        print(f"[Retrieval] Reranker unavailable ({e}) — using RRF order without reranking")
+        # RRF already gave `candidates` a reasonable relevance order; skip
+        # straight to returning the top-k from that order rather than
+        # crashing the whole request over a model that couldn't load.
+        final_k = top_k or settings.rerank_top_k
+        results = [_to_result(c, 1.0 - i * 0.01) for i, c in enumerate(candidates[:final_k])]
+        print(f"[Retrieval] Returning {len(results)} chunks (no rerank — degraded mode)")
+        return results
 
-    scored = sorted(zip(candidates, rerank_scores), key=lambda x: float(x[1]), reverse=True)
+    # Small guideline-priority nudge: when a chunk's source matches the
+    # clinician's active guideline, boost it slightly ahead of otherwise-tied
+    # cross-guideline chunks. This is intentionally small (it must not let a
+    # weak on-guideline chunk beat a strong off-guideline one — it only
+    # breaks near-ties) since comparative evidence from other guidelines is
+    # still clinically useful and should not be suppressed outright.
+    guideline_upper = active_guideline.upper()
+    nudged_scores = []
+    for chunk, score in zip(candidates, rerank_scores):
+        source = str(chunk.get("source_name", "")).upper() + str(
+            (chunk.get("metadata") or {}).get("source", "")
+        ).upper()
+        nudge = 0.15 if guideline_upper in source else 0.0
+        nudged_scores.append(score + nudge)
+
+    order = sorted(
+        range(len(candidates)), key=lambda i: nudged_scores[i], reverse=True
+    )
+
     final_k = top_k or settings.rerank_top_k
-    results = [_to_result(chunk, float(score)) for chunk, score in scored[:final_k]]
+    # Over-fetch before diversity selection so MMR has real alternatives to
+    # pick from rather than just re-ordering an already-narrow top-k.
+    pool_size = min(len(order), max(final_k * 3, final_k + 5))
+    pool = [(candidates[i], rerank_scores[i]) for i in order[:pool_size]]
 
-    print(f"[Retrieval] Returning {len(results)} chunks, top score={results[0].similarity_score if results else 'N/A'}")
+    selected = _mmr_select(pool, k=final_k, lambda_mult=0.7)
+    results = [_to_result(chunk, score) for chunk, score in selected]
+
+    print(f"[Retrieval] Returning {len(results)} chunks (MMR-diversified from pool of {len(pool)}), "
+          f"top score={results[0].similarity_score if results else 'N/A'}")
     return results
+
+
+def _mmr_select(
+    pool: list[tuple[dict, float]],
+    k: int,
+    lambda_mult: float = 0.7,
+) -> list[tuple[dict, float]]:
+    """
+    Maximal Marginal Relevance selection over a candidate pool.
+
+    Flat vector/BM25 RAG tends to return several near-duplicate chunks (same
+    section split across overlapping windows, or the same fact repeated
+    across two guideline PDFs) which wastes the LLM's limited context on
+    redundant text instead of covering the query's different facets. MMR
+    trades a little top-1 relevance for coverage: each pick balances its own
+    rerank score against how different it is (by token overlap) from what's
+    already been selected.
+
+    lambda_mult closer to 1.0 favours relevance; closer to 0.0 favours
+    diversity. 0.7 keeps the top-ranked chunk first but meaningfully
+    penalises near-duplicates after that.
+    """
+    if not pool:
+        return []
+    if len(pool) <= k:
+        return pool
+
+    def _tokens(chunk: dict) -> set[str]:
+        text = (chunk.get("chunk_text", "") or "").lower()
+        return set(re.findall(r"[a-z0-9]{4,}", text))
+
+    remaining = list(pool)
+    token_cache = {id(c): _tokens(c) for c, _ in remaining}
+
+    scores = [s for _, s in remaining]
+    lo, hi = min(scores), max(scores)
+    span = (hi - lo) or 1.0
+
+    def norm(s: float) -> float:
+        return (s - lo) / span
+
+    selected: list[tuple[dict, float]] = [remaining.pop(0)]
+
+    while remaining and len(selected) < k:
+        best_idx, best_val = 0, float("-inf")
+        for i, (chunk, score) in enumerate(remaining):
+            chunk_tokens = token_cache[id(chunk)]
+            max_sim = 0.0
+            for sel_chunk, _ in selected:
+                sel_tokens = token_cache[id(sel_chunk)]
+                if not chunk_tokens or not sel_tokens:
+                    continue
+                union = chunk_tokens | sel_tokens
+                if not union:
+                    continue
+                jaccard = len(chunk_tokens & sel_tokens) / len(union)
+                max_sim = max(max_sim, jaccard)
+            mmr_val = lambda_mult * norm(score) - (1 - lambda_mult) * max_sim
+            if mmr_val > best_val:
+                best_val, best_idx = mmr_val, i
+        selected.append(remaining.pop(best_idx))
+
+    return selected
 
 
 def _fallback_chunks(query: str, active_guideline: str, limit: int) -> list[EvidenceChunkResult]:

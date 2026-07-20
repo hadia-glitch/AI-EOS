@@ -21,10 +21,11 @@ dependencies:
   dio: ^5.7.0
   go_router: ^14.6.0
   supabase_flutter: ^2.8.0
-  flutter_secure_storage: ^9.2.2
+  flutter_secure_storage: ^10.3.1
   local_auth: ^2.3.0
   crypto: ^3.0.2
   flutter_dotenv: ^5.2.1
+  connectivity_plus: ^6.1.0
 
   # AI explanation and charting
   google_generative_ai: ^0.4.0
@@ -33,6 +34,13 @@ dependencies:
   # Evidence screen — URL launching and markdown rendering
   url_launcher: ^6.3.0
   flutter_markdown: ^0.7.3
+
+  # Offline guideline PDF viewing — page jump + text search highlighting
+  # (see lib/presentation/screens/guideline_pdf_viewer_screen.dart)
+  syncfusion_flutter_pdfviewer: ^34.1.30
+  # Local file caching for downloaded guideline PDFs
+  # (see lib/data/offline_pdf_cache.dart)
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:

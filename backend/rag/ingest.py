@@ -85,6 +85,44 @@ _MIN_CHUNK_CHARS = 150
 _MIN_LINE_CHARS = 40  # lines shorter than this are dropped unless they're headings
 
 
+STORAGE_BUCKET = "guidelines"
+
+
+def _upload_pdf_to_storage(
+    supabase, local_path: Path, source: str, file_name: str
+) -> tuple[str | None, str | None]:
+    """
+    Uploads the guideline PDF to Supabase Storage so the mobile app can
+    download it once and cache it locally for offline viewing (see
+    lib/data/offline_pdf_cache.dart and the "jump to source page" feature
+    in evidence_search_screen.dart). Non-fatal on failure — ingestion still
+    completes and the chunk stays searchable, it just won't have an offline
+    PDF link until the next successful ingest.
+
+    Requires a public "guidelines" bucket to exist in Supabase Storage
+    (Dashboard -> Storage -> New bucket -> "guidelines" -> Public = ON).
+    These are guideline PDFs, never patient data, so a public bucket is
+    appropriate here (unlike anything in the patient_* tables).
+    """
+    if not local_path.exists():
+        return None, None
+
+    storage_path = f"{source}/{file_name}"
+    try:
+        with open(local_path, "rb") as f:
+            supabase.storage.from_(STORAGE_BUCKET).upload(
+                storage_path,
+                f.read(),
+                {"content-type": "application/pdf", "upsert": "true"},
+            )
+        storage_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_path)
+        print(f"[Ingest] Uploaded {file_name} to Storage: {storage_path}")
+        return storage_path, storage_url
+    except Exception as e:
+        print(f"[Ingest] Storage upload failed for {file_name} (non-fatal): {e}")
+        return None, None
+
+
 def _clean_text(raw: str) -> str:
     """
     Remove PDF extraction artifacts from raw text.
@@ -274,6 +312,10 @@ def ingest_directory(
     for file_name, (meta, docs) in by_file.items():
         print(f"[Ingest] Processing {file_name} ({len(docs)} pages)…")
 
+        storage_path, storage_url = _upload_pdf_to_storage(
+            supabase, guidelines_dir / file_name, meta.source, file_name
+        )
+
         doc_row = (
             supabase.table("guideline_documents")
             .insert({
@@ -283,6 +325,8 @@ def ingest_directory(
                 "region_tag": meta.region_tag,
                 "ingested_at": ingestion_date,
                 "active": True,
+                "storage_path": storage_path,
+                "storage_url": storage_url,
             })
             .execute()
         )

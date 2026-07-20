@@ -305,7 +305,7 @@ class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.04),
+                color: Colors.black.withValues(alpha: 0.04),
                 blurRadius: 6,
                 offset: const Offset(0, 2),
               ),
@@ -319,7 +319,7 @@ class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
               maxX: maxX,
               lineTouchData: LineTouchData(
                 touchTooltipData: LineTouchTooltipData(
-                  getTooltipColor: (_) => WhoTheme.primaryNavy.withOpacity(0.9),
+                  getTooltipColor: (_) => WhoTheme.primaryNavy.withValues(alpha: 0.9),
                   getTooltipItems: (touchedSpots) {
                     return touchedSpots.map((spot) {
                       return LineTooltipItem(
@@ -340,7 +340,7 @@ class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
                   dotData: const FlDotData(show: true),
                   belowBarData: BarAreaData(
                     show: true,
-                    color: widget.result.riskCategory.color.withOpacity(0.1),
+                    color: widget.result.riskCategory.color.withValues(alpha: 0.1),
                   ),
                 ),
               ],
@@ -424,11 +424,11 @@ class _PatientTimelineScreenState extends State<PatientTimelineScreen> {
               margin: const EdgeInsets.only(bottom: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),
-                side: BorderSide(color: color.withOpacity(0.15), width: 1),
+                side: BorderSide(color: color.withValues(alpha: 0.15), width: 1),
               ),
               child: ListTile(
                 leading: CircleAvatar(
-                  backgroundColor: color.withOpacity(0.12),
+                  backgroundColor: color.withValues(alpha: 0.12),
                   child: Text(
                     '$score',
                     style: TextStyle(fontWeight: FontWeight.bold, color: color),

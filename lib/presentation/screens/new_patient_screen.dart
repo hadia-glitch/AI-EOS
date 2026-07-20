@@ -15,7 +15,9 @@ class NewPatientScreen extends StatefulWidget {
 class _NewPatientScreenState extends State<NewPatientScreen> {
   // Short, human-readable reference shown in the UI (e.g. "A1B2C3D4").
   // This is NOT the database primary key — see _patientId below.
-  final _refController = TextEditingController(text: const Uuid().v4().substring(0, 8).toUpperCase());
+  final _refController = TextEditingController(
+    text: const Uuid().v4().substring(0, 8).toUpperCase(),
+  );
 
   // CRITICAL FIX: patient.id is written into patient_encounters.id and into
   // the UUID foreign-key columns clinical_assessments.encounter_id,
@@ -48,51 +50,101 @@ class _NewPatientScreenState extends State<NewPatientScreen> {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  TextField(controller: _refController, decoration: const InputDecoration(labelText: 'Patient Reference')),
+                  TextField(
+                    controller: _refController,
+                    decoration: const InputDecoration(
+                      labelText: 'Patient Reference',
+                    ),
+                  ),
                   ListTile(
                     title: const Text('Date & Time of Birth'),
                     subtitle: Text(_birthDateTime.toString().substring(0, 16)),
                     trailing: IconButton(
                       icon: const Icon(Icons.calendar_today),
                       onPressed: () async {
-                        final d = await showDatePicker(context: context, firstDate: DateTime.now().subtract(const Duration(days: 7)), lastDate: DateTime.now(), initialDate: _birthDateTime);
+                        final d = await showDatePicker(
+                          context: context,
+                          firstDate: DateTime.now().subtract(
+                            const Duration(days: 7),
+                          ),
+                          lastDate: DateTime.now(),
+                          initialDate: _birthDateTime,
+                        );
                         if (d != null) setState(() => _birthDateTime = d);
                       },
                     ),
                   ),
-                  Row(
+                  Wrap(
+                    runSpacing: 8,
                     children: [
-                      Expanded(
+                      SizedBox(
+                        width: double.infinity,
                         child: Row(
                           children: [
-                            IconButton(onPressed: () => setState(() => _gaWeeks = (_gaWeeks - 1).clamp(22, 43)), icon: const Icon(Icons.remove)),
-                            Text('$_gaWeeks w'),
-                            IconButton(onPressed: () => setState(() => _gaWeeks = (_gaWeeks + 1).clamp(22, 43)), icon: const Icon(Icons.add)),
+                            IconButton(
+                              onPressed: () => setState(
+                                () => _gaWeeks = (_gaWeeks - 1).clamp(22, 43),
+                              ),
+                              icon: const Icon(Icons.remove),
+                            ),
+                            Expanded(
+                              child: Text(
+                                '$_gaWeeks w',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () => setState(
+                                () => _gaWeeks = (_gaWeeks + 1).clamp(22, 43),
+                              ),
+                              icon: const Icon(Icons.add),
+                            ),
                           ],
                         ),
                       ),
-                      Expanded(
+                      SizedBox(
+                        width: double.infinity,
                         child: Row(
                           children: [
-                            IconButton(onPressed: () => setState(() => _gaDays = (_gaDays - 1).clamp(0, 6)), icon: const Icon(Icons.remove)),
-                            Text('$_gaDays d'),
-                            IconButton(onPressed: () => setState(() => _gaDays = (_gaDays + 1).clamp(0, 6)), icon: const Icon(Icons.add)),
+                            IconButton(
+                              onPressed: () => setState(
+                                () => _gaDays = (_gaDays - 1).clamp(0, 6),
+                              ),
+                              icon: const Icon(Icons.remove),
+                            ),
+                            Expanded(
+                              child: Text(
+                                '$_gaDays d',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () => setState(
+                                () => _gaDays = (_gaDays + 1).clamp(0, 6),
+                              ),
+                              icon: const Icon(Icons.add),
+                            ),
                           ],
                         ),
                       ),
                     ],
                   ),
                   TextField(
-                    decoration: const InputDecoration(labelText: 'Birth Weight (grams)'),
+                    decoration: const InputDecoration(
+                      labelText: 'Birth Weight (grams)',
+                    ),
                     keyboardType: TextInputType.number,
-                    onChanged: (v) => _birthWeight = int.tryParse(v) ?? _birthWeight,
+                    onChanged: (v) =>
+                        _birthWeight = int.tryParse(v) ?? _birthWeight,
                   ),
                   if (_gaTotal < 35)
                     Container(
                       margin: const EdgeInsets.only(top: 12),
                       padding: const EdgeInsets.all(12),
                       color: WhoTheme.riskIntermediate.withValues(alpha: 0.2),
-                      child: const Text('EOSCAL 2024 validated for ≥35 weeks. Outputs flagged as unvalidated below this threshold.'),
+                      child: const Text(
+                        'EOSCAL 2024 validated for ≥35 weeks. Outputs flagged as unvalidated below this threshold.',
+                      ),
                     ),
                 ],
               ),
@@ -122,7 +174,9 @@ class _NewPatientScreenState extends State<NewPatientScreen> {
               );
               Navigator.pushReplacement(
                 context,
-                MaterialPageRoute(builder: (_) => PatientEntryFlow(existingPatient: patient)),
+                MaterialPageRoute(
+                  builder: (_) => PatientEntryFlow(existingPatient: patient),
+                ),
               );
             },
             child: const Text('Create Patient & Begin Assessment'),

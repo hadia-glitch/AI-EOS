@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../core/theme.dart';
+import '../../data/api/api_client.dart';
+import '../../data/offline_guideline_cache.dart';
+import '../../data/offline_pdf_cache.dart';
 
 class StewardshipDashboardScreen extends StatelessWidget {
   const StewardshipDashboardScreen({super.key});
@@ -74,8 +77,86 @@ class UserManagementScreen extends StatelessWidget {
   }
 }
 
-class GuidelineConfigScreen extends StatelessWidget {
+class GuidelineConfigScreen extends StatefulWidget {
   const GuidelineConfigScreen({super.key});
+
+  @override
+  State<GuidelineConfigScreen> createState() => _GuidelineConfigScreenState();
+}
+
+class _GuidelineConfigScreenState extends State<GuidelineConfigScreen> {
+  bool _rebuilding = false;
+  bool _syncing = false;
+  bool _downloadingPdfs = false;
+  String? _rebuildStatus;
+  DateTime? _lastSynced;
+  int _cachedProtocolCount = 0;
+  int _pdfDownloadCompleted = 0;
+  int _pdfDownloadTotal = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOfflineStatus();
+  }
+
+  Future<void> _loadOfflineStatus() async {
+    final synced = await OfflineGuidelineCache.lastSynced();
+    final keys = await OfflineGuidelineCache.cachedKeys();
+    if (mounted) {
+      setState(() {
+        _lastSynced = synced;
+        _cachedProtocolCount = keys.length;
+      });
+    }
+  }
+
+  Future<void> _rebuildVectorIndex() async {
+    setState(() {
+      _rebuilding = true;
+      _rebuildStatus = null;
+    });
+    try {
+      final response = await apiClient.dio.post('/api/v1/admin/guidelines/ingest');
+      final data = response.data as Map<String, dynamic>;
+      final inserted = data['chunks_inserted'] ?? 0;
+      setState(() => _rebuildStatus = 'Rebuilt — $inserted chunks indexed. '
+          'Offline care plans will refresh next time the app syncs.');
+    } catch (e) {
+      setState(() => _rebuildStatus = 'Rebuild failed: $e');
+    } finally {
+      if (mounted) setState(() => _rebuilding = false);
+    }
+  }
+
+  Future<void> _syncOfflineCache() async {
+    setState(() => _syncing = true);
+    await OfflineGuidelineCache.sync();
+    await _loadOfflineStatus();
+    if (mounted) setState(() => _syncing = false);
+  }
+
+  Future<void> _downloadAllPdfs() async {
+    setState(() {
+      _downloadingPdfs = true;
+      _pdfDownloadCompleted = 0;
+      _pdfDownloadTotal = 0;
+    });
+    // wifiOnly: false — this is an explicit tap from Settings, not a
+    // background boot sync, so the clinician has opted in to the data cost.
+    await OfflinePdfCache.syncAllPdfs(
+      wifiOnly: false,
+      onProgress: (completed, total) {
+        if (mounted) {
+          setState(() {
+            _pdfDownloadCompleted = completed;
+            _pdfDownloadTotal = total;
+          });
+        }
+      },
+    );
+    if (mounted) setState(() => _downloadingPdfs = false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -104,7 +185,86 @@ class GuidelineConfigScreen extends StatelessWidget {
             title: Text('Vector index: Healthy'),
             subtitle: Text('Last rebuilt: 2 hours ago · Total chunks: 4,847'),
           ),
-          OutlinedButton(onPressed: () {}, child: const Text('Rebuild vector index')),
+          OutlinedButton(
+            onPressed: _rebuilding ? null : _rebuildVectorIndex,
+            child: _rebuilding
+                ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Rebuild vector index'),
+          ),
+          if (_rebuildStatus != null) ...[
+            const SizedBox(height: 8),
+            Text(_rebuildStatus!, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text('Offline care plan cache', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(
+            'Every guideline (including uploaded local protocols) is pre-synthesized into '
+            '4 risk-level protocols and synced to this device so care plans still work '
+            'with zero connectivity. Rebuilding the vector index above also refreshes this — '
+            'sync afterward to pull it to this device.',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: Icon(
+                _cachedProtocolCount > 0 ? Icons.offline_pin : Icons.warning_amber_rounded,
+                color: _cachedProtocolCount > 0 ? WhoTheme.riskLow : WhoTheme.riskIntermediate,
+              ),
+              title: Text('$_cachedProtocolCount protocol${_cachedProtocolCount == 1 ? '' : 's'} cached on this device'),
+              subtitle: Text(_lastSynced != null
+                  ? 'Last synced: ${_lastSynced!.toLocal().toString().substring(0, 16)}'
+                  : 'Never synced — connect to the backend at least once'),
+              trailing: TextButton(
+                onPressed: _syncing ? null : _syncOfflineCache,
+                child: _syncing
+                    ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text('Sync now'),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text('Offline guideline PDFs', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(
+            'Downloads every guideline PDF to this device so "view in source PDF" works with '
+            'zero connectivity, without needing to have opened each document online first. '
+            'Runs automatically over WiFi at app launch — tap below to force it now, including '
+            'over mobile data.',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.picture_as_pdf_outlined, color: WhoTheme.secondaryTeal),
+                  title: const Text('Download all guideline PDFs'),
+                  subtitle: _downloadingPdfs && _pdfDownloadTotal > 0
+                      ? Text('Downloading $_pdfDownloadCompleted / $_pdfDownloadTotal…')
+                      : const Text('For fully offline "view in source PDF"'),
+                  trailing: TextButton(
+                    onPressed: _downloadingPdfs ? null : _downloadAllPdfs,
+                    child: _downloadingPdfs
+                        ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Text('Download all'),
+                  ),
+                ),
+                if (_downloadingPdfs && _pdfDownloadTotal > 0)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: LinearProgressIndicator(
+                      value: _pdfDownloadCompleted / _pdfDownloadTotal,
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );

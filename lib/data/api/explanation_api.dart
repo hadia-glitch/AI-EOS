@@ -2,9 +2,7 @@ import 'dart:developer' as developer;
 import 'package:dio/dio.dart';
 import '../deidentify.dart';
 import '../gemini_service.dart';
-import '../guidelines_data.dart';
 import '../models/rag_chunk.dart';
-import '../rag_service.dart';
 import '../../domain/eoscal_calculator.dart';
 import 'api_client.dart';
 
@@ -125,6 +123,7 @@ class ExplanationApi {
       guidelineCitations: citations,
       isSimulated: isSimulated,
       sourceLabel: sourceLabel,
+      factCheck: FactCheckInfo.fromJson(data['fact_check'] as Map<String, dynamic>?),
     );
   }
 
@@ -228,6 +227,7 @@ class ExplanationApi {
       guidelineCitations: citations,
       isSimulated: isSimulated,
       sourceLabel: sourceLabel,
+      factCheck: FactCheckInfo.fromJson(data['fact_check'] as Map<String, dynamic>?),
     );
   }
 

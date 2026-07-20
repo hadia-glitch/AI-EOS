@@ -23,6 +23,7 @@ class EvidenceChunkResponse(BaseModel):
     version: str
     chunk_index: int | None = None
     page_number: int | None = None
+    file_name: str = ""
 
 
 class PatientSnapshot(BaseModel):
@@ -61,6 +62,22 @@ class CitationItem(BaseModel):
     similarity_score: float
 
 
+class FactCheckResult(BaseModel):
+    """
+    Output of the Phase-3 judge agent (rag/fact_check.py). `performed=False`
+    means the check was skipped (e.g. LOW/INTERMEDIATE risk — see
+    config.fact_check_categories) or both LLM providers were unavailable —
+    in either case the draft is served as-is and the UI should treat it the
+    same as an unverified rule-based/AI answer, not as "verified".
+    """
+    performed: bool = False
+    verified: bool = True
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    flagged_claims: list[str] = Field(default_factory=list)
+    notes: str = ""
+    judge_model: str = ""
+
+
 class ExplanationResponse(BaseModel):
     clinical_summary: str
     per_driver_explanations: list[dict[str, str]]
@@ -72,6 +89,7 @@ class ExplanationResponse(BaseModel):
     model_version: str
     generated_offline: bool = False
     fallback_used: bool = False
+    fact_check: FactCheckResult = Field(default_factory=FactCheckResult)
 
 
 class AntibioticPlanSchema(BaseModel):
@@ -109,6 +127,7 @@ class ClinicalCarePlanResponse(BaseModel):
     model_version: str
     generated_offline: bool = False
     fallback_used: bool = False
+    fact_check: FactCheckResult = Field(default_factory=FactCheckResult)
 
 
 class RagHealthResponse(BaseModel):

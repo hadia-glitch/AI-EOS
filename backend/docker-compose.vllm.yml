@@ -1,0 +1,61 @@
+# vLLM, serving Mistral-7B-Instruct with an OpenAI-compatible API and
+# continuous-batching concurrency. This is the PRODUCTION path once you're
+# serving multiple clinicians simultaneously — Ollama serializes requests
+# more naively; vLLM's PagedAttention scheduler handles concurrent requests
+# far more efficiently, which matters once your hospital/clinic has more
+# than one or two people using the app at the same time.
+#
+# REQUIRES: Linux host with an NVIDIA GPU (16GB+ VRAM recommended for
+# comfortable concurrency at this model size) and the NVIDIA Container
+# Toolkit installed. Does NOT run natively on Windows — if your production
+# server is Windows, run this inside WSL2 with GPU passthrough, or deploy
+# to a Linux VM/cloud GPU instance instead (this is the more common choice
+# for an actual hospital deployment; your dev machine stays on Ollama).
+#
+# Usage:
+#   docker compose -f docker-compose.vllm.yml up -d
+#   # First run downloads the model from HuggingFace Hub (~15GB fp16,
+#   # or use a pre-quantized AWQ/GPTQ variant to cut that and VRAM use).
+#
+# Then in backend/.env:
+#   LOCAL_LLM_ENABLED=true
+#   LOCAL_LLM_BASE_URL=http://<this-server-host>:8000/v1
+#   LOCAL_LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.3
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: neoguard-vllm
+    restart: unless-stopped
+    ports:
+      # Bind to your internal network interface, not the public internet —
+      # e.g. "10.0.1.5:8000:8000" for a specific private IP. 0.0.0.0 shown
+      # here for simplicity; lock this down at the firewall/VPC level in
+      # any real deployment.
+      - "8000:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    environment:
+      # Only needed if the model repo is gated on HuggingFace Hub — Mistral
+      # 7B Instruct v0.3 is Apache-2.0 and ungated, so this can usually stay
+      # empty. Set it if you switch to a gated model.
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    command:
+      - --model=mistralai/Mistral-7B-Instruct-v0.3
+      - --served-model-name=mistral:7b-instruct
+      - --max-model-len=8192
+      - --gpu-memory-utilization=0.90
+      # Enables the guided-JSON decoding backend — meaningfully more
+      # reliable structured output than prompt-instruction-only JSON mode,
+      # worth enabling once you're on vLLM (Ollama doesn't offer this).
+      - --guided-decoding-backend=outlines
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  hf_cache:

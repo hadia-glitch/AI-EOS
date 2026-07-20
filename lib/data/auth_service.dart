@@ -17,12 +17,9 @@ class AuthService {
   bool get isSignedIn => currentUser != null;
 
   // ── User-scoped local storage keys ──────────────────────────────────────
-  // CRITICAL FIX: these keys previously were global constants
-  // ('local_unlock_pin', 'biometric_unlock_enabled') shared across every
-  // account that ever signed in on the device. That meant a brand-new
-  // account would inherit whatever PIN the *previous* test account had set
-  // on the same emulator, and skip straight to PIN entry instead of setup.
-  // Scoping every key by the Supabase user id fixes this at the root.
+  // Every key here is scoped by user id so that a PIN cached on this device
+  // for one account can never leak into a different account that later
+  // signs in on the same device/emulator.
   String _pinHashKey(String userId) => 'local_pin_hash_$userId';
   String _biometricKey(String userId) => 'biometric_unlock_enabled_$userId';
 
@@ -44,7 +41,7 @@ class AuthService {
         if (res['role'] != null) {
           await prefs.setString('user_role', res['role'] as String);
         }
-        return res as Map<String, dynamic>;
+        return res;
       }
     } catch (e) {
       debugPrint('Failed to load user settings: $e');
@@ -53,9 +50,7 @@ class AuthService {
   }
 
   /// Authoritative check for "has THIS user completed first-login setup
-  /// anywhere, ever?" Always checked against Supabase (users.pin_hash), never
-  /// against local device storage — local storage can be stale or can belong
-  /// to a different account that previously used this device.
+  /// anywhere, ever?" Always checked against Supabase (users.pin_hash).
   Future<bool> hasCompletedSetup() async {
     if (!isSignedIn) return false;
     try {
@@ -80,7 +75,6 @@ class AuthService {
       email: email,
       password: password,
     );
-    // Update last_login timestamp — non-fatal if it fails
     final userId = response.user?.id;
     if (userId != null) {
       try {
@@ -96,22 +90,38 @@ class AuthService {
   }
 
   /// Signs up and immediately inserts a row into the public users table.
+  /// fullName/phone are optional profile fields (see migration
+  /// 007_users_profile_fields.sql) used by the new signup flow.
   /// Deliberately does NOT set pin_hash here — an absent pin_hash is what
   /// marks the account as "setup not completed" for routing purposes.
   Future<AuthResponse> signUp({
     required String email,
     required String password,
+    String? fullName,
+    String? phone,
   }) async {
-    final response = await client.auth.signUp(email: email, password: password);
+    final response = await client.auth.signUp(
+      email: email,
+      password: password,
+      data: {
+        if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
+        if (phone != null && phone.isNotEmpty) 'phone': phone,
+      },
+    );
     final userId = response.user?.id;
     if (userId != null) {
       try {
         await client.from('users').upsert({
           'id': userId,
           'role': 'nurse',
+          if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
+          if (phone != null && phone.isNotEmpty) 'phone': phone,
         });
       } catch (e) {
-        // Non-fatal: users row can be created later in setup
+        // Non-fatal in the sense that we don't block the UI, but this is
+        // exactly the kind of failure that silently breaks first-login
+        // setup later (see 006_users_rls_policies.sql). Surfacing it
+        // clearly here helps catch RLS/FK problems immediately on signup.
         debugPrint('Could not insert users row: $e');
       }
     }
@@ -120,10 +130,6 @@ class AuthService {
 
   Future<void> signOut() async {
     await client.auth.signOut();
-    // NOTE: we intentionally do NOT wipe secure storage here. Every key is
-    // scoped by user id (see _pinHashKey/_biometricKey above), so leftover
-    // entries from this account never leak into a different account that
-    // later signs in on the same device.
   }
 
   /// Resend the confirmation email for an unconfirmed account.
@@ -134,11 +140,8 @@ class AuthService {
     );
   }
 
-  /// Caches a hash of the PIN locally, scoped to the current user, for fast
-  /// offline unlock. Writing pin_hash to Supabase itself is done by the
-  /// caller (first-login setup screen) as part of its single combined
-  /// upsert with role/institution/guideline — this method only maintains
-  /// the local per-device cache.
+  // ── PIN unlock ───────────────────────────────────────────────────────────
+
   Future<void> saveLocalUnlock({
     required String pin,
     required bool biometricEnabled,
@@ -154,10 +157,6 @@ class AuthService {
     );
   }
 
-  /// Whether THIS user has a locally-cached PIN on THIS device.
-  /// Used only to decide "fast local unlock" vs "first time on this device,
-  /// verify against the DB hash instead" — never used to decide whether
-  /// setup itself is complete (see hasCompletedSetup).
   Future<bool> hasLocalUnlock() async {
     final userId = currentUser?.id;
     if (userId == null) return false;
@@ -201,5 +200,86 @@ class AuthService {
     } catch (_) {
       return false;
     }
+  }
+
+  // ── Multi-factor authentication (TOTP, optional) ────────────────────────
+  // Uses Supabase's built-in MFA API — no custom backend needed. Enrollment
+  // and verification both require connectivity, so this is only ever
+  // offered once a user is fully online and past first-login setup.
+
+  /// Starts TOTP enrollment. Returns the factor id and an otpauth:// URI the
+  /// user can add to any authenticator app (Google Authenticator, Authy,
+  /// etc). Call confirmMfaEnrollment() with a code from that app to finish.
+  Future<({String factorId, String otpauthUri, String secret})> beginMfaEnrollment() async {
+    final res = await client.auth.mfa.enroll(factorType: FactorType.totp);
+    final totp = res.totp;
+    if (totp == null) {
+      throw StateError('Supabase did not return TOTP enrollment details.');
+    }
+    return (
+      factorId: res.id,
+      otpauthUri: totp.uri,
+      secret: totp.secret,
+    );
+  }
+
+  /// Verifies the 6-digit code from the authenticator app and activates
+  /// the factor.
+  Future<void> confirmMfaEnrollment({
+    required String factorId,
+    required String code,
+  }) async {
+    final challenge = await client.auth.mfa.challenge(factorId: factorId);
+    await client.auth.mfa.verify(
+      factorId: factorId,
+      challengeId: challenge.id,
+      code: code,
+    );
+  }
+
+  Future<bool> isMfaEnabled() async {
+    try {
+      final factors = await client.auth.mfa.listFactors();
+      return factors.totp.any((f) => f.status == FactorStatus.verified);
+    } catch (e) {
+      debugPrint('Could not list MFA factors: $e');
+      return false;
+    }
+  }
+
+  Future<String?> primaryVerifiedTotpFactorId() async {
+    try {
+      final factors = await client.auth.mfa.listFactors();
+      final verified = factors.totp.where((f) => f.status == FactorStatus.verified);
+      return verified.isEmpty ? null : verified.first.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// After signInWithPassword succeeds, call this to check whether the
+  /// session still needs a second-factor challenge before it's fully
+  /// trusted (aal2). Returns false if the account has no MFA factor.
+  Future<bool> needsMfaChallenge() async {
+    try {
+      final level = client.auth.mfa.getAuthenticatorAssuranceLevel();
+      return level.currentLevel == AuthenticatorAssuranceLevels.aal1 &&
+          level.nextLevel == AuthenticatorAssuranceLevels.aal2;
+    } catch (e) {
+      debugPrint('Could not read MFA assurance level: $e');
+      return false;
+    }
+  }
+
+  Future<void> verifyMfaChallenge({
+    required String factorId,
+    required String code,
+  }) async {
+    final challenge = await client.auth.mfa.challenge(factorId: factorId);
+    await client.auth.mfa.verify(
+      factorId: factorId,
+      challengeId: challenge.id,
+      code: code,
+    );
   }
 }

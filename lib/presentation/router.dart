@@ -9,16 +9,16 @@ import 'screens/admin_screens.dart';
 final appRouter = GoRouter(
   initialLocation: '/',
   routes: [
-    GoRoute(path: '/', builder: (_, __) => const SplashScreen()),
-    GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
-    GoRoute(path: '/setup', builder: (_, __) => const FirstLoginSetupScreen()),
-    GoRoute(path: '/home', builder: (_, __) => const HomeDashboard()),
-    GoRoute(path: '/new-patient', builder: (_, __) => const NewPatientScreen()),
-    GoRoute(path: '/admin/stewardship', builder: (_, __) => const StewardshipDashboardScreen()),
+    GoRoute(path: '/', builder: (_, _) => const SplashScreen()),
+    GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+    GoRoute(path: '/setup', builder: (_, _) => const FirstLoginSetupScreen()),
+    GoRoute(path: '/home', builder: (_, _) => const HomeDashboard()),
+    GoRoute(path: '/new-patient', builder: (_, _) => const NewPatientScreen()),
+    GoRoute(path: '/admin/stewardship', builder: (_, _) => const StewardshipDashboardScreen()),
     // User management is intentionally parked for now.
     // GoRoute(path: '/admin/users', builder: (_, __) => const UserManagementScreen()),
-    GoRoute(path: '/admin/guidelines', builder: (_, __) => const GuidelineConfigScreen()),
-    GoRoute(path: '/admin/audit', builder: (_, __) => const AuditLogScreen()),
+    GoRoute(path: '/admin/guidelines', builder: (_, _) => const GuidelineConfigScreen()),
+    GoRoute(path: '/admin/audit', builder: (_, _) => const AuditLogScreen()),
     // Institution settings is intentionally parked for now.
     // GoRoute(path: '/admin/settings', builder: (_, __) => const InstitutionSettingsScreen()),
   ],

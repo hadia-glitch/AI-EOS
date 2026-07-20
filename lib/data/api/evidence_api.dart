@@ -78,7 +78,7 @@ class EvidenceApi {
                     'chunk_text': c.chunkText,
                   })
               .toList(),
-          if (patientContext != null) 'patient_context': patientContext,
+          'patient_context': ?patientContext,
         },
       );
       final data = response.data as Map<String, dynamic>;
@@ -117,7 +117,7 @@ class EvidenceApi {
                     'chunk_text': c.chunkText,
                   })
               .toList(),
-          if (patientContext != null) 'patient_context': patientContext,
+          'patient_context': ?patientContext,
         },
       );
 
@@ -225,9 +225,11 @@ class EvidenceApi {
   List<EvidenceCardResult> _fallbackCards(List<RagChunk> chunks) {
     return chunks.map((c) {
       final sentences = c.chunkText.split(RegExp(r'(?<=[.!?])\s+'));
-      final headline = sentences.isNotEmpty && sentences.first.length <= 120
-          ? sentences.first
-          : c.section;
+      // Google-style: show the document/section title, not a raw text
+      // fragment — matches the backend's _fallback_cards behaviour so the
+      // headline looks the same whether the AI-cards call failed (this
+      // path) or the backend itself had no LLM provider.
+      final headline = c.section.isNotEmpty ? '${c.sourceName} — ${c.section}' : c.sourceName;
       return EvidenceCardResult(
         headline: headline,
         processedAnswer: c.chunkText,
@@ -262,6 +264,8 @@ class EvidenceApi {
       content: c.chunkText,
       keywords: const [],
       documentUrl: local?.documentUrl.isNotEmpty == true ? local!.documentUrl : docUrl,
+      fileName: c.fileName,
+      pageNumber: c.pageNumber,
     );
   }
 

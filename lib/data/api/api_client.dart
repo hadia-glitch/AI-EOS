@@ -27,7 +27,26 @@ class ApiClient {
       BaseOptions(
         baseUrl: this.baseUrl,
         connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 45),
+        // 1300s (~21.7 min), not 90s: matches the backend's
+        // local_llm_timeout_seconds (config.py), currently 600s (10 min)
+        // for TESTING purposes — 300s wasn't enough for a real care-plan
+        // prompt on this CPU-only local model. Worst case for HIGH/CRITICAL
+        // risk is two full local generations back-to-back in one request
+        // (main generation + the fact-check judge, see rag/fact_check.py),
+        // so this must cover ~20 min plus margin, not just one call.
+        // THIS IS A DIAGNOSTIC VALUE, NOT A PRODUCTION ONE — once you have
+        // a real measured generation time from a successful run, dial both
+        // this and the backend value down to something reasonable (or move
+        // to a GPU-backed local instance, or accept cloud fallback for
+        // interactive use and reserve strict Local-only for batch/offline
+        // paths where a 10+ minute wait is acceptable).
+        // NOTE: if you're on the Android emulator (10.0.2.2), the
+        // emulator's own virtual NAT can silently drop long-idle
+        // connections well before this timeout ever fires — see
+        // api_client.dart's baseUrl docs. Use `adb reverse tcp:8000
+        // tcp:8000` + API_BASE_URL=http://127.0.0.1:8000, or test on a
+        // physical device, or this timeout value won't matter at all.
+        receiveTimeout: const Duration(seconds: 1300),
         headers: {'Content-Type': 'application/json'},
       ),
     );

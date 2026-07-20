@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/offline_banner.dart';
+import '../../core/widgets/fact_check_badge.dart';
 import '../../core/widgets/source_badge.dart';
 import '../../data/api/explanation_api.dart';
 import '../../data/auth_service.dart';
@@ -88,7 +89,7 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
     }
   }
 
-  void _retry() => setState(() => _future = _generate());
+  void _retry() => setState(() { _future = _generate(); });
 
   @override
   Widget build(BuildContext context) {
@@ -227,6 +228,7 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
 
         // ── Source banner — ALWAYS honest about what generated this ──────────
         _SourceBanner(exp: exp),
+        FactCheckBadge(factCheck: exp.factCheck),
 
         const SizedBox(height: 12),
 

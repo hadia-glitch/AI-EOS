@@ -1,0 +1,42 @@
+# Ollama, serving Mistral-7B-Instruct locally. This is the "get it working
+# today" path — runs on CPU (slow but functional) or GPU (fast) on Windows,
+# Mac, or Linux, including your current Windows dev machine.
+#
+# Usage:
+#   docker compose -f docker-compose.ollama.yml up -d
+#   docker exec -it neoguard-ollama ollama pull mistral:7b-instruct-q4_K_M
+#
+# Then in backend/.env:
+#   LOCAL_LLM_ENABLED=true
+#   LOCAL_LLM_BASE_URL=http://localhost:11434/v1
+#   LOCAL_LLM_MODEL=mistral:7b-instruct-q4_K_M
+#
+# No GPU? Remove the "deploy" block below entirely — Ollama runs fine on
+# CPU, just slower (expect 10-30s+ per care plan generation on a modern
+# CPU vs 2-5s on a GPU). For a single-clinic pilot with low request volume
+# this is often perfectly acceptable.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: neoguard-ollama
+    restart: unless-stopped
+    ports:
+      # Bind to localhost only, not 0.0.0.0 — this should never be exposed
+      # to the public internet. The FastAPI backend on the same machine (or
+      # same private network) reaches it at http://localhost:11434.
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    # Remove this whole "deploy" block if you don't have an NVIDIA GPU —
+    # Ollama auto-detects and falls back to CPU otherwise.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  ollama_models:

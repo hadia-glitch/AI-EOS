@@ -1,15 +1,18 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/fact_check_badge.dart';
 import '../../data/api/explanation_api.dart';
 import '../../data/auth_service.dart';
 import '../../data/gemini_service.dart';
 import '../../data/models/rag_chunk.dart';
 import '../../data/supabase_config.dart';
 import '../../domain/eoscal_calculator.dart';
+import '../../domain/offline_care_plan_builder.dart';
 
 /// Screen 15 (v2) — Clinical Care Plan
 ///
@@ -36,6 +39,7 @@ class CarePlanScreen extends ConsumerStatefulWidget {
   final PatientParameters patient;
   final EoscalResult result;
   final String activeGuideline;
+
   /// When true, renders without Scaffold/AppBar for embedding inside a tab
   /// (PatientDetailScreen tab 4).
   final bool embeddedInTab;
@@ -70,12 +74,59 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
   Future<ClinicalCarePlan> _loadAndGenerate() async {
     _previousAssessments = await _fetchPreviousAssessments();
     _trend = _computeTrend(_previousAssessments, widget.result.totalScore);
-    return explanationApi.generateCarePlan(
-      encounterId: widget.patient.id,
+    try {
+      return await explanationApi.generateCarePlan(
+        encounterId: widget.patient.id,
+        patient: widget.patient,
+        result: widget.result,
+        activeGuideline: widget.activeGuideline,
+        previousAssessments: _previousAssessments,
+      );
+    } on BackendUnreachableException {
+      // Health check itself failed — genuinely offline. Try the locally-
+      // synced guideline knowledge cache before giving up.
+      return await _fallbackToOfflinePlan();
+    } on DioException catch (e) {
+      // Health check PASSED (backend is up) but the actual generation call
+      // then failed. Two cases we treat the same way — fall back to the
+      // offline protocol if one is cached, since a guideline-based answer
+      // beats a technically-correct error either way:
+      //   1. Timeout: care plan generation chains retrieval + rerank, an
+      //      LLM call, and for HIGH/CRITICAL a second fact-check judge LLM
+      //      call — on a slow connection or cold LLM provider this can
+      //      genuinely exceed the client timeout even though the backend
+      //      itself is healthy.
+      //   2. 5xx server error: the backend responded but failed internally
+      //      — e.g. it has no internet to reach Supabase/HuggingFace/the
+      //      LLM providers even though it's reachable from this device on
+      //      the local network (a real scenario during offline testing:
+      //      the dev machine running the backend loses its own internet
+      //      while staying reachable to the emulator/phone over LAN).
+      final isNetworkIssue =
+          e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.sendTimeout ||
+          e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.badResponse;
+      if (isNetworkIssue) {
+        return await _fallbackToOfflinePlan(dioError: e);
+      }
+      rethrow;
+    }
+  }
+
+  Future<ClinicalCarePlan> _fallbackToOfflinePlan({
+    DioException? dioError,
+  }) async {
+    // Covers every configured guideline, including any local protocol
+    // uploaded via Settings > Guideline Configuration once it has synced —
+    // and now ALWAYS succeeds even before that first sync, via the
+    // built-in rule-based protocol tier (see CuratedCarePlanRules). The
+    // "no offline plan available" error path is effectively retired.
+    return OfflineCarePlanBuilder.build(
       patient: widget.patient,
       result: widget.result,
       activeGuideline: widget.activeGuideline,
-      previousAssessments: _previousAssessments,
     );
   }
 
@@ -125,13 +176,16 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
 
   _Trend _computeTrend(List<Map<String, dynamic>> previous, int currentScore) {
     if (previous.isEmpty) return _Trend.none;
-    final lastScore = (previous.last['combined_score'] as num?)?.toInt() ?? currentScore;
+    final lastScore =
+        (previous.last['combined_score'] as num?)?.toInt() ?? currentScore;
     final delta = currentScore - lastScore;
     if (delta.abs() <= 1) return _Trend.stable;
     return delta > 0 ? _Trend.deteriorating : _Trend.improving;
   }
 
-  void _retry() => setState(() => _future = _loadAndGenerate());
+  void _retry() => setState(() {
+    _future = _loadAndGenerate();
+  });
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
@@ -174,8 +228,10 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
         children: [
           const CircularProgressIndicator(),
           const SizedBox(height: 18),
-          Text('Building clinical care plan…',
-              style: TextStyle(color: Colors.grey.shade600)),
+          Text(
+            'Building clinical care plan…',
+            style: TextStyle(color: Colors.grey.shade600),
+          ),
           const SizedBox(height: 6),
           Text(
             'Reviewing history · Checking cache · Querying ${widget.activeGuideline} evidence',
@@ -202,7 +258,9 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             ),
             const SizedBox(height: 14),
             Text(
-              isUnreachable ? 'Backend unreachable' : 'Could not generate care plan',
+              isUnreachable
+                  ? 'Backend unreachable'
+                  : 'Could not generate care plan',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 10),
@@ -219,34 +277,48 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
                   children: [
                     Text(
                       'The NeoGuard backend could not be reached at:',
-                      style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
+                      ),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       (error as BackendUnreachableException).backendUrl,
                       style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold),
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 10),
                     const Text(
                       'Is the backend running?  Make sure:',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 6),
-                    const Text('1. Run:  cd backend && uvicorn main:app --host 0.0.0.0 --port 8000',
-                        style: TextStyle(fontSize: 12, fontFamily: 'monospace')),
-                    const SizedBox(height: 4),
-                    const Text('2. For a physical device, pass your machine\'s LAN IP:',
-                        style: TextStyle(fontSize: 12)),
-                    const SizedBox(height: 4),
-                    const Text('   flutter run -d <id> --dart-define=API_BASE_URL=http://192.168.x.x:8000',
-                        style: TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                    const Text(
+                      '1. Run:  cd backend && uvicorn main:app --host 0.0.0.0 --port 8000',
+                      style: TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                    ),
                     const SizedBox(height: 4),
                     const Text(
-                        '   Find your LAN IP: ipconfig (Windows) | ifconfig (Mac/Linux)',
-                        style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      '2. For a physical device, pass your machine\'s LAN IP:',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      '   flutter run -d <id> --dart-define=API_BASE_URL=http://192.168.x.x:8000',
+                      style: TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      '   Find your LAN IP: ipconfig (Windows) | ifconfig (Mac/Linux)',
+                      style: TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
                   ],
                 ),
               ),
@@ -262,15 +334,22 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.info_outline, size: 16, color: Colors.grey.shade600),
+                    Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: Colors.grey.shade600,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'This care plan cannot be generated offline. Unlike the risk score itself '
-                        '(which is always available locally), the structured 7-section plan requires '
-                        'the backend to synthesise guideline evidence and, when available, prior '
-                        'assessment history.',
-                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700, height: 1.5),
+                        'The app normally shows a built-in offline protocol here automatically — '
+                        'seeing this error instead means something unexpected went wrong generating '
+                        'even that. Try again, or restart the app if this persists.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                          height: 1.5,
+                        ),
                       ),
                     ),
                   ],
@@ -300,6 +379,7 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
       children: [
         const SizedBox(height: 10),
         _SourceBanner(plan: plan),
+        FactCheckBadge(factCheck: plan.factCheck),
         const SizedBox(height: 12),
 
         // ── A. Patient Development Summary ────────────────────────────────
@@ -313,12 +393,21 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
               _TrendChip(trend: _trend, count: _previousAssessments.length),
               const SizedBox(height: 12),
             ],
-            Text(plan.clinicalSummary, style: const TextStyle(fontSize: 14, height: 1.7)),
+            Text(
+              plan.clinicalSummary,
+              style: const TextStyle(fontSize: 14, height: 1.7),
+            ),
             if (plan.trendNarrative.isNotEmpty) ...[
               const SizedBox(height: 10),
-              Text(plan.trendNarrative,
-                  style: TextStyle(
-                      fontSize: 13, height: 1.6, fontStyle: FontStyle.italic, color: Colors.grey.shade700)),
+              Text(
+                plan.trendNarrative,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.6,
+                  fontStyle: FontStyle.italic,
+                  color: Colors.grey.shade700,
+                ),
+              ),
             ],
             if (!plan.isSimulated) ...[
               const SizedBox(height: 12),
@@ -334,7 +423,10 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             icon: Icons.analytics_outlined,
             accentColor: const Color(0xFF7C3AED),
             children: [
-              Text(plan.riskAnalysis, style: const TextStyle(fontSize: 14, height: 1.7)),
+              Text(
+                plan.riskAnalysis,
+                style: const TextStyle(fontSize: 14, height: 1.7),
+              ),
             ],
           ),
 
@@ -347,11 +439,14 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
           headerBadge: 'Within 60 min',
           children: [
             if (plan.recommendedActions.isEmpty)
-              Text('No immediate actions identified.', style: TextStyle(color: Colors.grey.shade600))
+              Text(
+                'No immediate actions identified.',
+                style: TextStyle(color: Colors.grey.shade600),
+              )
             else
               ...plan.recommendedActions.asMap().entries.map(
-                    (e) => _ActionItem(index: e.key + 1, text: e.value),
-                  ),
+                (e) => _ActionItem(index: e.key + 1, text: e.value),
+              ),
           ],
         ),
 
@@ -365,7 +460,11 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             padding: const EdgeInsets.only(bottom: 16),
             child: Text(
               plan.monitoringPlan,
-              style: TextStyle(fontSize: 13, height: 1.6, color: Colors.grey.shade700),
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.6,
+                color: Colors.grey.shade700,
+              ),
             ),
           ),
 
@@ -376,7 +475,11 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             padding: const EdgeInsets.only(bottom: 16),
             child: Text(
               plan.escalationCriteria,
-              style: TextStyle(fontSize: 13, height: 1.6, color: Colors.grey.shade700),
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.6,
+                color: Colors.grey.shade700,
+              ),
             ),
           ),
 
@@ -388,7 +491,10 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             icon: Icons.radar,
             accentColor: const Color(0xFFD97706),
             children: [
-              Text(plan.driverBreakdown, style: const TextStyle(fontSize: 14, height: 1.7)),
+              Text(
+                plan.driverBreakdown,
+                style: const TextStyle(fontSize: 14, height: 1.7),
+              ),
             ],
           ),
 
@@ -401,8 +507,8 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             accentColor: Colors.grey.shade600,
             children: [
               ...plan.guidelineCitations.asMap().entries.map(
-                    (e) => _CitationRow(index: e.key + 1, text: e.value),
-                  ),
+                (e) => _CitationRow(index: e.key + 1, text: e.value),
+              ),
             ],
           ),
 
@@ -452,13 +558,22 @@ class _TrendChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 6,
+        runSpacing: 4,
         children: [
           Icon(icon, size: 14, color: color),
-          const SizedBox(width: 6),
-          Text('$label · $count prior assessment${count == 1 ? '' : 's'}',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+          Text(
+            '$label · $count prior assessment${count == 1 ? '' : 's'}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
         ],
       ),
     );
@@ -492,9 +607,14 @@ class _SourceBanner extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Protocol-Based Plan',
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey.shade800)),
+                  Text(
+                    'Protocol-Based Plan',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: Colors.grey.shade800,
+                    ),
+                  ),
                   const SizedBox(height: 2),
                   Text(
                     plan.sourceLabel.isNotEmpty
@@ -520,11 +640,17 @@ class _SourceBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(isCached ? Icons.cached : Icons.auto_awesome, size: 16, color: const Color(0xFF1A56DB)),
+          Icon(
+            isCached ? Icons.cached : Icons.auto_awesome,
+            size: 16,
+            color: const Color(0xFF1A56DB),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              plan.sourceLabel.isNotEmpty ? plan.sourceLabel : 'AI-generated · clinical care plan',
+              plan.sourceLabel.isNotEmpty
+                  ? plan.sourceLabel
+                  : 'AI-generated · clinical care plan',
               style: const TextStyle(fontSize: 12, color: Color(0xFF1A56DB)),
             ),
           ),
@@ -571,10 +697,19 @@ class _LetteredSection extends StatelessWidget {
                   Container(
                     width: 24,
                     height: 24,
-                    decoration: BoxDecoration(color: accentColor, shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                      color: accentColor,
+                      shape: BoxShape.circle,
+                    ),
                     alignment: Alignment.center,
-                    child: Text(letter!,
-                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                    child: Text(
+                      letter!,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 8),
                 ] else ...[
@@ -582,15 +717,33 @@ class _LetteredSection extends StatelessWidget {
                   const SizedBox(width: 8),
                 ],
                 Expanded(
-                  child: Text(title,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: accentColor)),
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      color: accentColor,
+                    ),
+                  ),
                 ),
                 if (headerBadge != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(color: accentColor, borderRadius: BorderRadius.circular(10)),
-                    child: Text(headerBadge!,
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: accentColor,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      headerBadge!,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -619,13 +772,27 @@ class _ActionItem extends StatelessWidget {
             width: 26,
             height: 26,
             margin: const EdgeInsets.only(right: 10, top: 1),
-            decoration: const BoxDecoration(color: Color(0xFF059669), shape: BoxShape.circle),
+            decoration: const BoxDecoration(
+              color: Color(0xFF059669),
+              shape: BoxShape.circle,
+            ),
             child: Center(
-              child: Text('$index',
-                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+              child: Text(
+                '$index',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ),
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 14, height: 1.55))),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 14, height: 1.55),
+            ),
+          ),
         ],
       ),
     );
@@ -650,29 +817,50 @@ class _CitationRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('$index.', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey.shade500, fontSize: 13)),
+          Text(
+            '$index.',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.grey.shade500,
+              fontSize: 13,
+            ),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(url != null ? text.replaceAll(url, '').trim() : text,
-                    style: const TextStyle(fontSize: 13, height: 1.5)),
+                Text(
+                  url != null ? text.replaceAll(url, '').trim() : text,
+                  style: const TextStyle(fontSize: 13, height: 1.5),
+                ),
                 if (url != null)
                   GestureDetector(
                     onTap: () async {
-                      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                      await launchUrl(
+                        Uri.parse(url),
+                        mode: LaunchMode.externalApplication,
+                      );
                     },
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Flexible(
-                          child: Text(url,
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF1A56DB)),
-                              overflow: TextOverflow.ellipsis),
+                          child: Text(
+                            url,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF1A56DB),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                         const SizedBox(width: 3),
-                        const Icon(Icons.arrow_outward, size: 12, color: Color(0xFF1A56DB)),
+                        const Icon(
+                          Icons.arrow_outward,
+                          size: 12,
+                          color: Color(0xFF1A56DB),
+                        ),
                       ],
                     ),
                   ),
@@ -685,7 +873,9 @@ class _CitationRow extends StatelessWidget {
             constraints: const BoxConstraints(),
             onPressed: () {
               Clipboard.setData(ClipboardData(text: text));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Citation copied')));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Citation copied')));
             },
           ),
         ],
@@ -711,7 +901,11 @@ class _AiDisclaimerChip extends StatelessWidget {
           Expanded(
             child: Text(
               'AI-generated. Clinical judgement of the responsible clinician supersedes this output.',
-              style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.amber.shade900),
+              style: TextStyle(
+                fontSize: 11,
+                fontStyle: FontStyle.italic,
+                color: Colors.amber.shade900,
+              ),
             ),
           ),
         ],
@@ -736,37 +930,80 @@ class _AntibioticPlanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final notRequired = !plan.required;
-    final bgColor = notRequired ? Colors.green.shade50 : const Color(0xFFFFF7ED);
-    final borderColor = notRequired ? Colors.green.shade200 : Colors.orange.shade300;
-    final headerColor = notRequired ? Colors.green.shade700 : Colors.orange.shade800;
+    final bgColor = notRequired
+        ? Colors.green.shade50
+        : const Color(0xFFFFF7ED);
+    final borderColor = notRequired
+        ? Colors.green.shade200
+        : Colors.orange.shade300;
+    final headerColor = notRequired
+        ? Colors.green.shade700
+        : Colors.orange.shade800;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: borderColor)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: borderColor),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(color: bgColor, borderRadius: const BorderRadius.vertical(top: Radius.circular(12))),
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(12),
+              ),
+            ),
             child: Row(
               children: [
                 Container(
                   width: 24,
                   height: 24,
-                  decoration: BoxDecoration(color: headerColor, shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                    color: headerColor,
+                    shape: BoxShape.circle,
+                  ),
                   alignment: Alignment.center,
-                  child: const Text('C', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'C',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 8),
-                Text('Antibiotic Plan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: headerColor)),
+                Text(
+                  'Antibiotic Plan',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: headerColor,
+                  ),
+                ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                  decoration: BoxDecoration(color: headerColor, borderRadius: BorderRadius.circular(12)),
-                  child: Text(notRequired ? 'Not indicated' : plan.urgency,
-                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: headerColor,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    notRequired ? 'Not indicated' : plan.urgency,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -780,23 +1017,40 @@ class _AntibioticPlanCard extends StatelessWidget {
                   if (plan.regimen.isNotEmpty) ...[
                     _fieldLabel('Regimen'),
                     const SizedBox(height: 6),
-                    ...plan.regimen.map((r) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(Icons.circle, size: 6, color: Color(0xFFD97706)),
-                              const SizedBox(width: 10),
-                              Expanded(child: Text(r, style: const TextStyle(fontSize: 14, height: 1.5))),
-                            ],
-                          ),
-                        )),
+                    ...plan.regimen.map(
+                      (r) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(
+                              Icons.circle,
+                              size: 6,
+                              color: Color(0xFFD97706),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                r,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  height: 1.5,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 8),
                   ],
                   if (plan.duration.isNotEmpty && plan.duration != 'N/A') ...[
                     _fieldLabel('Duration'),
                     const SizedBox(height: 4),
-                    Text(plan.duration, style: const TextStyle(fontSize: 14, height: 1.5)),
+                    Text(
+                      plan.duration,
+                      style: const TextStyle(fontSize: 14, height: 1.5),
+                    ),
                     const SizedBox(height: 10),
                   ],
                 ] else
@@ -809,24 +1063,30 @@ class _AntibioticPlanCard extends StatelessWidget {
                     ),
                   ),
                 const Divider(height: 24),
-                _fieldLabel('If labs come back — always follow one of these three paths'),
+                _fieldLabel(
+                  'If labs come back — always follow one of these three paths',
+                ),
                 const SizedBox(height: 10),
                 _ConditionalBranch(
                   color: WhoTheme.riskLow,
-                  title: 'Culture NEGATIVE at 36–48 h + CRP < 10 mg/L + clinically well',
+                  title:
+                      'Culture NEGATIVE at 36–48 h + CRP < 10 mg/L + clinically well',
                   action: 'STOP antibiotics.',
                 ),
                 const SizedBox(height: 8),
                 _ConditionalBranch(
                   color: WhoTheme.riskCritical,
                   title: 'Culture POSITIVE',
-                  action: 'CONTINUE for 7 days minimum; adjust to sensitivities.',
+                  action:
+                      'CONTINUE for 7 days minimum; adjust to sensitivities.',
                 ),
                 const SizedBox(height: 8),
                 _ConditionalBranch(
                   color: WhoTheme.riskIntermediate,
-                  title: 'Labs UNAVAILABLE (culture/CRP cannot be obtained or resulted)',
-                  action: 'Treat as INTERMEDIATE risk — continue empirical antibiotics and '
+                  title:
+                      'Labs UNAVAILABLE (culture/CRP cannot be obtained or resulted)',
+                  action:
+                      'Treat as INTERMEDIATE risk — continue empirical antibiotics and '
                       'arrange transfer to a facility with lab capability within 6 hours.',
                 ),
               ],
@@ -837,15 +1097,25 @@ class _AntibioticPlanCard extends StatelessWidget {
     );
   }
 
-  Widget _fieldLabel(String text) =>
-      Text(text, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFF374151)));
+  Widget _fieldLabel(String text) => Text(
+    text,
+    style: const TextStyle(
+      fontWeight: FontWeight.w600,
+      fontSize: 13,
+      color: Color(0xFF374151),
+    ),
+  );
 }
 
 class _ConditionalBranch extends StatelessWidget {
   final Color color;
   final String title;
   final String action;
-  const _ConditionalBranch({required this.color, required this.title, required this.action});
+  const _ConditionalBranch({
+    required this.color,
+    required this.title,
+    required this.action,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -859,10 +1129,20 @@ class _ConditionalBranch extends StatelessWidget {
       ),
       child: RichText(
         text: TextSpan(
-          style: const TextStyle(fontSize: 13, height: 1.5, color: Color(0xFF1A1A2E)),
+          style: const TextStyle(
+            fontSize: 13,
+            height: 1.5,
+            color: Color(0xFF1A1A2E),
+          ),
           children: [
-            TextSpan(text: 'If $title\n', style: const TextStyle(fontWeight: FontWeight.w600)),
-            TextSpan(text: '→ $action', style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+            TextSpan(
+              text: 'If $title\n',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            TextSpan(
+              text: '→ $action',
+              style: TextStyle(color: color, fontWeight: FontWeight.bold),
+            ),
           ],
         ),
       ),
@@ -881,11 +1161,17 @@ class _MonitoringScheduleCard extends StatelessWidget {
   const _MonitoringScheduleCard();
 
   static const _rows = [
-    ('Every 1–4 h (CRITICAL/HIGH)', 'HR, RR, SpO2, temp, perfusion, consciousness'),
+    (
+      'Every 1–4 h (CRITICAL/HIGH)',
+      'HR, RR, SpO2, temp, perfusion, consciousness',
+    ),
     ('At H+6', 'Repeat clinical assessment. Escalate if worse.'),
     ('At H+18–24', 'CRP, FBC if not done. Review blood culture status.'),
     ('At H+36–48', 'Decision point: stop or continue antibiotics.'),
-    ('If labs unavailable', 'Clinical reassessment every 4 h. Transfer for labs within 6 h.'),
+    (
+      'If labs unavailable',
+      'Clinical reassessment every 4 h. Transfer for labs within 6 h.',
+    ),
   ];
 
   @override
@@ -903,31 +1189,59 @@ class _MonitoringScheduleCard extends StatelessWidget {
                 Container(
                   width: 24,
                   height: 24,
-                  decoration: const BoxDecoration(color: Color(0xFF0891B2), shape: BoxShape.circle),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF0891B2),
+                    shape: BoxShape.circle,
+                  ),
                   alignment: Alignment.center,
-                  child: const Text('D', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'D',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 8),
-                const Text('Monitoring Schedule',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0891B2))),
+                const Text(
+                  'Monitoring Schedule',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: Color(0xFF0891B2),
+                  ),
+                ),
                 const Spacer(),
-                Text('NICE NG195', style: TextStyle(fontSize: 10, color: Colors.grey.shade500)),
+                Text(
+                  'NICE NG195',
+                  style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+                ),
               ],
             ),
             const Divider(height: 20),
-            ..._rows.map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: 140,
-                        child: Text(r.$1, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ..._rows.map(
+              (r) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      r.$1,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
-                      Expanded(child: Text(r.$2, style: const TextStyle(fontSize: 13, height: 1.5))),
-                    ],
-                  ),
-                )),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      r.$2,
+                      style: const TextStyle(fontSize: 13, height: 1.5),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -970,29 +1284,50 @@ class _EscalationCriteriaCard extends StatelessWidget {
                 Container(
                   width: 24,
                   height: 24,
-                  decoration: const BoxDecoration(color: Color(0xFFDC2626), shape: BoxShape.circle),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFDC2626),
+                    shape: BoxShape.circle,
+                  ),
                   alignment: Alignment.center,
-                  child: const Text('E', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'E',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 8),
-                const Text('Escalation Criteria',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFFDC2626))),
+                const Text(
+                  'Escalation Criteria',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: Color(0xFFDC2626),
+                  ),
+                ),
               ],
             ),
             const Divider(height: 20),
-            ..._triggers.map((t) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.red.shade200),
-                    ),
-                    child: Text(t, style: const TextStyle(fontSize: 13, height: 1.5)),
+            ..._triggers.map(
+              (t) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.shade200),
                   ),
-                )),
+                  child: Text(
+                    t,
+                    style: const TextStyle(fontSize: 13, height: 1.5),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1027,12 +1362,16 @@ class _SafetyDisclaimer extends StatelessWidget {
             child: Text(
               isSimulated
                   ? 'This is a protocol-based plan generated from EOSCAL score and guideline rules '
-                      'only — no AI language model was used. Clinical judgement of the responsible '
-                      'clinician takes precedence.'
+                        'only — no AI language model was used. Clinical judgement of the responsible '
+                        'clinician takes precedence.'
                   : 'This care plan was generated by an AI language model for educational support '
-                      'only. Clinical decisions must be made by a qualified clinician based on the '
-                      'full clinical picture. NeoGuard AI does not replace clinical judgement.',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600, height: 1.5),
+                        'only. Clinical decisions must be made by a qualified clinician based on the '
+                        'full clinical picture. NeoGuard AI does not replace clinical judgement.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+                height: 1.5,
+              ),
             ),
           ),
         ],

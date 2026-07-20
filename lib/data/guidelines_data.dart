@@ -6,6 +6,13 @@ class GuidelineChunk {
   final List<String> keywords;
   /// Public URL for this guideline document. Used for citation links in the UI.
   final String documentUrl;
+  /// PDF file name (matches guideline_documents.name / evidence_chunks
+  /// metadata.file_name on the backend) — used to look up/download the
+  /// cached local PDF for offline "jump to source" viewing. Empty for the
+  /// static bundled chunks below, which have no backing PDF.
+  final String fileName;
+  /// 1-indexed PDF page this chunk was extracted from, if known.
+  final int? pageNumber;
 
   const GuidelineChunk({
     required this.id,
@@ -14,6 +21,8 @@ class GuidelineChunk {
     required this.content,
     required this.keywords,
     this.documentUrl = '',
+    this.fileName = '',
+    this.pageNumber,
   });
 }
 

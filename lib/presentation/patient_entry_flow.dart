@@ -25,7 +25,9 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
   final _mrnController = TextEditingController();
   double _gestationalAge = 38.0;
   DateTime _birthDate = DateTime.now().subtract(const Duration(hours: 12));
-  TimeOfDay _birthTime = TimeOfDay.fromDateTime(DateTime.now().subtract(const Duration(hours: 12)));
+  TimeOfDay _birthTime = TimeOfDay.fromDateTime(
+    DateTime.now().subtract(const Duration(hours: 12)),
+  );
   double _maternalTemp = 37.0;
   double _romHours = 0.0;
   bool _gbsPositive = false;
@@ -73,9 +75,11 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
       _neonatalTemp = p.neonatalTemperature;
       _neurologicalStatus = p.neurologicalStatus;
 
-      if (p.wbcCount != null) _wbcController.text = p.wbcCount!.toStringAsFixed(0);
+      if (p.wbcCount != null)
+        _wbcController.text = p.wbcCount!.toStringAsFixed(0);
       if (p.itRatio != null) _itRatioController.text = p.itRatio!.toString();
-      if (p.plateletCount != null) _plateletsController.text = p.plateletCount!.toStringAsFixed(0);
+      if (p.plateletCount != null)
+        _plateletsController.text = p.plateletCount!.toStringAsFixed(0);
       if (p.crpLevel != null) _crpController.text = p.crpLevel!.toString();
       if (p.pctLevel != null) _pctController.text = p.pctLevel!.toString();
       _bloodCulturePositive = p.bloodCulturePositive ?? false;
@@ -106,8 +110,12 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
     return PatientParameters(
       id: widget.existingPatient?.id ?? const Uuid().v4(),
-      name: _nameController.text.trim().isEmpty ? 'Draft Assessment' : _nameController.text.trim(),
-      mrn: _mrnController.text.trim().isEmpty ? 'MRN-TEMP' : _mrnController.text.trim(),
+      name: _nameController.text.trim().isEmpty
+          ? 'Draft Assessment'
+          : _nameController.text.trim(),
+      mrn: _mrnController.text.trim().isEmpty
+          ? 'MRN-TEMP'
+          : _mrnController.text.trim(),
       gestationalAgeWeeks: _gestationalAge,
       birthDateTime: combinedBirthDateTime,
       maternalTemperature: _maternalTemp,
@@ -191,7 +199,11 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.existingPatient != null ? 'Edit Assessment' : 'New Sepsis Assessment'),
+        title: Text(
+          widget.existingPatient != null
+              ? 'Edit Assessment'
+              : 'New Sepsis Assessment',
+        ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
@@ -203,7 +215,7 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
           children: [
             // Progress Bar / Stepper Header
             Container(
-              color: WhoTheme.primaryNavy.withOpacity(0.04),
+              color: WhoTheme.primaryNavy.withValues(alpha: 0.04),
               padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
               child: Row(
                 children: [
@@ -231,7 +243,7 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
                 color: Colors.white,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
+                    color: Colors.black.withValues(alpha: 0.08),
                     offset: const Offset(0, -3),
                     blurRadius: 6,
                   ),
@@ -266,7 +278,10 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
                             ),
                             const SizedBox(width: 8),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
                                 color: liveResult.riskCategory.color,
                                 borderRadius: BorderRadius.circular(4),
@@ -324,14 +339,16 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
             backgroundColor: isDone
                 ? WhoTheme.secondaryTeal
                 : isActive
-                    ? WhoTheme.primaryNavy
-                    : Colors.grey.shade300,
+                ? WhoTheme.primaryNavy
+                : Colors.grey.shade300,
             child: isDone
                 ? const Icon(Icons.check, color: Colors.white, size: 16)
                 : Text(
                     '${step + 1}',
                     style: TextStyle(
-                      color: isActive || isDone ? Colors.white : Colors.grey.shade600,
+                      color: isActive || isDone
+                          ? Colors.white
+                          : Colors.grey.shade600,
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
                     ),
@@ -340,6 +357,9 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
           const SizedBox(height: 4),
           Text(
             label,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 11,
               fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
@@ -353,11 +373,12 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
   Widget _buildStepHeaderLine(int beforeStep) {
     final isPassed = _currentStep >= beforeStep;
-    return Container(
-      width: 32,
-      height: 2,
-      color: isPassed ? WhoTheme.secondaryTeal : Colors.grey.shade300,
-      margin: const EdgeInsets.only(bottom: 16),
+    return Expanded(
+      child: Container(
+        height: 2,
+        color: isPassed ? WhoTheme.secondaryTeal : Colors.grey.shade300,
+        margin: const EdgeInsets.only(bottom: 16),
+      ),
     );
   }
 
@@ -458,7 +479,10 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
         ],
 
         // Birth DateTime Pickers
-        const Text('Birth Date & Time', style: TextStyle(fontWeight: FontWeight.bold)),
+        const Text(
+          'Birth Date & Time',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         const SizedBox(height: 8),
         Row(
           children: [
@@ -529,7 +553,8 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
         // Delivery Mode Dropdown
         DropdownButtonFormField<String>(
-          value: _deliveryMode,
+          initialValue: _deliveryMode,
+          isExpanded: true,
           decoration: const InputDecoration(labelText: 'Delivery Mode'),
           items: const [
             DropdownMenuItem(value: 'Vaginal', child: Text('Vaginal')),
@@ -561,7 +586,9 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
         // Adequate Antibiotics Switch (Only active if GBS positive or Chorio positive)
         SwitchListTile(
           title: const Text('Adequate Intrapartum Antibiotics'),
-          subtitle: const Text('Penicillin / Ampicillin / Cefazolin >= 4 hours before birth'),
+          subtitle: const Text(
+            'Penicillin / Ampicillin / Cefazolin >= 4 hours before birth',
+          ),
           value: _adequateAbx,
           onChanged: _gbsPositive || _chorio
               ? (val) {
@@ -575,7 +602,9 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
         // Chorioamnionitis Switch
         SwitchListTile(
           title: const Text('Clinical Chorioamnionitis'),
-          subtitle: const Text('Maternal clinical diagnosis of uterine infection'),
+          subtitle: const Text(
+            'Maternal clinical diagnosis of uterine infection',
+          ),
           value: _chorio,
           onChanged: (val) {
             setState(() {
@@ -602,15 +631,22 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
         // Respiratory Distress Dropdown
         DropdownButtonFormField<String>(
-          value: _respiratoryDistress,
+          initialValue: _respiratoryDistress,
+          isExpanded: true,
           decoration: const InputDecoration(
             labelText: 'Respiratory Distress Level',
             helperText: 'Tachypnea, retractions, grunting, nasal flaring',
           ),
           items: const [
             DropdownMenuItem(value: 'None', child: Text('None / Resolved')),
-            DropdownMenuItem(value: 'Mild', child: Text('Mild (transient tachypnea, brief grunting)')),
-            DropdownMenuItem(value: 'Severe', child: Text('Severe (persistent retractions, grunting, flaring)')),
+            DropdownMenuItem(
+              value: 'Mild',
+              child: Text('Mild (transient tachypnea, brief grunting)'),
+            ),
+            DropdownMenuItem(
+              value: 'Severe',
+              child: Text('Severe (persistent retractions, grunting, flaring)'),
+            ),
           ],
           onChanged: (val) {
             if (val != null) {
@@ -624,12 +660,21 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
         // Oxygen Support Dropdown
         DropdownButtonFormField<String>(
-          value: _oxygenNeed,
-          decoration: const InputDecoration(labelText: 'Oxygen Support Required'),
+          initialValue: _oxygenNeed,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Oxygen Support Required',
+          ),
           items: const [
             DropdownMenuItem(value: 'None', child: Text('None / Room Air')),
-            DropdownMenuItem(value: 'Supplemental', child: Text('Supplemental Oxygen (Hood / Nasal Prongs)')),
-            DropdownMenuItem(value: 'CPAP/Ventilation', child: Text('CPAP / High-flow / Mechanical Ventilation')),
+            DropdownMenuItem(
+              value: 'Supplemental',
+              child: Text('Supplemental Oxygen (Hood / Nasal Prongs)'),
+            ),
+            DropdownMenuItem(
+              value: 'CPAP/Ventilation',
+              child: Text('CPAP / High-flow / Mechanical Ventilation'),
+            ),
           ],
           onChanged: (val) {
             if (val != null) {
@@ -681,12 +726,22 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
 
         // Neurological Dropdown
         DropdownButtonFormField<String>(
-          value: _neurologicalStatus,
+          initialValue: _neurologicalStatus,
+          isExpanded: true,
           decoration: const InputDecoration(labelText: 'Neurological Status'),
           items: const [
-            DropdownMenuItem(value: 'Normal', child: Text('Normal tone & reactivity')),
-            DropdownMenuItem(value: 'Irritable/Lethargic', child: Text('Lethargy, hypotonia, or irritability')),
-            DropdownMenuItem(value: 'Seizures', child: Text('Observed neonatal seizures')),
+            DropdownMenuItem(
+              value: 'Normal',
+              child: Text('Normal tone & reactivity'),
+            ),
+            DropdownMenuItem(
+              value: 'Irritable/Lethargic',
+              child: Text('Lethargy, hypotonia, or irritability'),
+            ),
+            DropdownMenuItem(
+              value: 'Seizures',
+              child: Text('Observed neonatal seizures'),
+            ),
           ],
           onChanged: (val) {
             if (val != null) {
@@ -701,7 +756,9 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
         // Poor Perfusion Switch
         SwitchListTile(
           title: const Text('Signs of Poor Perfusion / Shock'),
-          subtitle: const Text('CRT > 3s, mottled skin, weak pulses, hypotension'),
+          subtitle: const Text(
+            'CRT > 3s, mottled skin, weak pulses, hypotension',
+          ),
           value: _poorPerfusion,
           onChanged: (val) {
             setState(() {
@@ -734,7 +791,11 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
               ),
               child: const Text(
                 'OPTIONAL',
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: WhoTheme.neutralDarkGrey),
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: WhoTheme.neutralDarkGrey,
+                ),
               ),
             ),
           ],
@@ -810,7 +871,7 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
           title: const Text('Blood Culture Result'),
           subtitle: const Text('Check to indicate blood culture is POSITIVE'),
           value: _bloodCulturePositive,
-          activeColor: WhoTheme.riskCritical,
+          activeThumbColor: WhoTheme.riskCritical,
           onChanged: (val) {
             setState(() {
               _bloodCulturePositive = val;

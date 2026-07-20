@@ -1,14 +1,15 @@
 """
 NeoGuard AI — LLM explanation engine.
 
-Provider priority:
-  1. Cache   — check llm_explanations table first (avoids all API calls)
-  2. Gemini  — primary (Google AI Studio key from .env)
-  3. Groq    — automatic fallback on ANY Gemini error: missing key, rate limit,
-               quota exceeded, invalid key, network error, JSON parse failure.
-               Uses Llama-3.3-70B-Versatile on the Groq free tier.
-  4. Rule-based — final fallback when both LLMs are unavailable.
-               Explicitly labelled NOT AI-generated in the UI.
+Provider priority (see services/llm_provider.py for the actual chain):
+  1. Cache      — check llm_explanations table first (avoids all LLM calls)
+  2. Local LLM  — Mistral-7B (or similar) via Ollama/vLLM, if enabled.
+                  No data leaves your infrastructure.
+  3. Gemini     — cloud fallback (skipped entirely in HIPAA-strict mode —
+                  see config.disable_cloud_llm_fallback)
+  4. Groq       — cloud fallback, same skip condition as Gemini
+  5. Rule-based — final fallback when every enabled provider is unavailable.
+                  Explicitly labelled NOT AI-generated in the UI.
 """
 
 from __future__ import annotations
@@ -19,11 +20,14 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import google.generativeai as genai
-from groq import Groq
-
 from config import get_settings
 from db import get_supabase
+from rag.fact_check import (
+    run_fact_check,
+    should_fact_check,
+    summarize_care_plan_for_judge,
+    summarize_explanation_for_judge,
+)
 from rag.retrieve import EvidenceChunkResult
 from schemas import (
     AntibioticPlanSchema,
@@ -31,7 +35,9 @@ from schemas import (
     ClinicalCarePlanResponse,
     EvidenceChunkResponse,
     ExplanationResponse,
+    FactCheckResult,
 )
+from services.llm_provider import LLMUnavailableError, call_llm
 
 
 # ── Disclaimers ───────────────────────────────────────────────────────────────
@@ -116,6 +122,7 @@ def _check_cache(cache_key: str) -> ExplanationResponse | None:
         ]
         model_ver = row.get("gemini_model_version", "unknown")
         print(f"[LLM] Cache HIT key={cache_key} model={model_ver} simulated={is_simulated}")
+        fc = resp_json.get("fact_check") or {}
         return ExplanationResponse(
             clinical_summary=resp_json.get("clinical_summary", ""),
             per_driver_explanations=resp_json.get("per_driver_explanations", []),
@@ -129,6 +136,7 @@ def _check_cache(cache_key: str) -> ExplanationResponse | None:
             rag_chunks=[],
             model_version=f"cached:{model_ver}",
             fallback_used=is_simulated,
+            fact_check=FactCheckResult(**fc) if fc else FactCheckResult(),
         )
     except Exception as e:
         print(f"[LLM] Cache check failed (non-fatal): {e}")
@@ -164,12 +172,13 @@ def _write_cache(
             "evidence_summary":        result.evidence_summary,
             "citation_list":           citations_json,
             "confidence_disclaimer":   result.confidence_disclaimer,
+            "fact_check":              result.fact_check.model_dump(),
         }
         patient = risk_payload.get("patient", {})
         if hasattr(patient, "model_dump"):
             patient = patient.model_dump()
 
-        supabase.table("llm_explanations").insert({
+        supabase.table("llm_explanations").upsert({
             "cache_key":            cache_key,
             "active_guideline":     active_guideline,
             "is_simulated":         is_simulated,
@@ -193,7 +202,7 @@ def _write_cache(
             "eoscal_score":         risk_payload.get("total_score", risk_payload.get("combined_score")),
             "risk_category":        category,
             "expires_at":           expires_at,
-        }).execute()
+        }, on_conflict="cache_key").execute()
         print(f"[LLM] Cached key={cache_key} ttl={ttl_h}h model={model_version} simulated={is_simulated}")
     except Exception as e:
         print(f"[LLM] Cache write failed (non-fatal): {e}")
@@ -341,55 +350,11 @@ def _parse_llm_response(
     )
 
 
-# ── Gemini call ───────────────────────────────────────────────────────────────
-
-def _call_gemini(
-    prompt: str,
-    settings,
-) -> str:
-    """Call Gemini and return raw text. Raises on any error."""
-    genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel(
-        model_name=settings.gemini_model,
-        generation_config={
-            "response_mime_type": "application/json",
-            "temperature": 0.1,
-            "top_p": 0.9,
-            "max_output_tokens": 2048,
-        },
-    )
-    print(f"[Gemini] Calling model={settings.gemini_model}")
-    response = model.generate_content(prompt)
-    return response.text
-
-
-# ── Groq call ─────────────────────────────────────────────────────────────────
-
-def _call_groq(
-    prompt: str,
-    settings,
-) -> str:
-    """Call Groq (Llama 3.3 70B) and return raw text. Raises on any error."""
-    client = Groq(api_key=settings.groq_api_key)
-    print(f"[Groq] Calling model={settings.groq_model}")
-    response = client.chat.completions.create(
-        model=settings.groq_model,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are NeoGuard AI, a neonatal clinical decision support engine. "
-                    "You always respond with valid JSON only — no markdown, no preamble."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.1,
-        max_tokens=2048,
-        # Groq supports JSON mode on Llama models
-        response_format={"type": "json_object"},
-    )
-    return response.choices[0].message.content
+# Gemini/Groq (and now Local LLM) calls are centralized in
+# services/llm_provider.py's call_llm() — see that module for the actual
+# provider chain. This keeps a single point of change for provider order,
+# retries, and HIPAA-strict mode instead of duplicating the chain across
+# every call site below.
 
 
 # ── Rule-based fallback ───────────────────────────────────────────────────────
@@ -468,6 +433,23 @@ def _fallback_explanation(
     )
 
 
+def _maybe_fact_check_explanation(
+    result: ExplanationResponse,
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    chunks: list[EvidenceChunkResult],
+) -> FactCheckResult:
+    """Runs the judge only for HIGH/CRITICAL categories (see config.fact_check_categories)."""
+    category = risk_payload.get("category", risk_payload.get("risk_category", ""))
+    if not should_fact_check(category):
+        return FactCheckResult(performed=False)
+    draft = summarize_explanation_for_judge(
+        result.clinical_summary, result.per_driver_explanations,
+        result.recommended_actions, result.evidence_summary,
+    )
+    return run_fact_check(draft, risk_payload, active_guideline, chunks)
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def generate_explanation(
@@ -481,11 +463,22 @@ def generate_explanation(
     cache_key = _make_cache_key(risk_payload, active_guideline)
 
     # ── 1. Cache ──────────────────────────────────────────────────────────────
+    # A rule-based-fallback cache hit is deliberately NOT returned here — it
+    # falls through to a live LLM attempt below instead, so a plan that was
+    # cached while every provider was down gets transparently upgraded to a
+    # real AI explanation the next time an LLM is reachable, without the
+    # clinician needing to do anything. Only a genuine AI-generated hit
+    # short-circuits and returns immediately (no wasted LLM call/latency for
+    # an answer that hasn't changed). If the live attempt below also fails,
+    # the existing rule-based-fallback path regenerates and rewrites the
+    # same cache_key, so this never leaves the clinician without an answer.
     cached = _check_cache(cache_key)
-    if cached is not None:
+    if cached is not None and not cached.fallback_used:
         cached.rag_chunks = chunk_responses
         _log_rag_query(query or "cached", active_guideline, chunks, method="cache")
         return cached
+    if cached is not None and cached.fallback_used:
+        print(f"[LLM] Cached explanation was rule-based-fallback — attempting live upgrade (key={cache_key})")
 
     # ── 2. Log RAG query ──────────────────────────────────────────────────────
     _log_rag_query(
@@ -496,33 +489,17 @@ def generate_explanation(
 
     prompt = _build_prompt(risk_payload, active_guideline, chunks)
 
-    # ── 3. Try Gemini ─────────────────────────────────────────────────────────
-    if settings.gemini_api_key:
-        try:
-            raw = _call_gemini(prompt, settings)
-            result = _parse_llm_response(raw, chunks, settings.gemini_model, chunk_responses)
-            _write_cache(cache_key, risk_payload, active_guideline, result,
-                         chunks, settings.gemini_model, is_simulated=False)
-            print(f"[Gemini] Success")
-            return result
-        except Exception as e:
-            print(f"[Gemini] Failed ({type(e).__name__}: {e}) — trying Groq fallback")
-    else:
-        print("[LLM] No GEMINI_API_KEY — skipping Gemini, trying Groq")
-
-    # ── 4. Try Groq (Llama 3.3 70B) ──────────────────────────────────────────
-    if settings.groq_api_key:
-        try:
-            raw = _call_groq(prompt, settings)
-            result = _parse_llm_response(raw, chunks, settings.groq_model, chunk_responses)
-            _write_cache(cache_key, risk_payload, active_guideline, result,
-                         chunks, settings.groq_model, is_simulated=False)
-            print(f"[Groq] Success")
-            return result
-        except Exception as e:
-            print(f"[Groq] Failed ({type(e).__name__}: {e}) — falling back to rule-based")
-    else:
-        print("[LLM] No GROQ_API_KEY — skipping Groq")
+    # ── 3. Try the LLM provider chain (Local -> Gemini -> Groq) ──────────────
+    try:
+        raw, model_used = call_llm(prompt, settings)
+        result = _parse_llm_response(raw, chunks, model_used, chunk_responses)
+        result.fact_check = _maybe_fact_check_explanation(result, risk_payload, active_guideline, chunks)
+        _write_cache(cache_key, risk_payload, active_guideline, result,
+                     chunks, model_used, is_simulated=False)
+        print(f"[LLM] Explanation generated via {model_used}")
+        return result
+    except LLMUnavailableError as e:
+        print(f"[LLM] All providers unavailable ({e}) — using rule-based fallback")
 
     # ── 5. Rule-based final fallback ──────────────────────────────────────────
     print("[LLM] Both Gemini and Groq unavailable — using rule-based fallback")
@@ -869,6 +846,23 @@ def _fallback_care_plan(
     )
 
 
+def _maybe_fact_check_care_plan(
+    result: ClinicalCarePlanResponse,
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    chunks: list[EvidenceChunkResult],
+) -> FactCheckResult:
+    category = risk_payload.get("category", risk_payload.get("risk_category", ""))
+    if not should_fact_check(category):
+        return FactCheckResult(performed=False)
+    draft = summarize_care_plan_for_judge(
+        result.clinical_summary, result.risk_analysis, result.driver_breakdown,
+        result.recommended_actions, result.antibiotic_plan.model_dump(),
+        result.monitoring_plan, result.escalation_criteria,
+    )
+    return run_fact_check(draft, risk_payload, active_guideline, chunks)
+
+
 def generate_care_plan(
     risk_payload: dict[str, Any],
     active_guideline: str,
@@ -882,11 +876,19 @@ def generate_care_plan(
     cache_key = _make_care_plan_cache_key(risk_payload, active_guideline, len(previous_assessments))
 
     # -- 1. Cache --
+    # Same rule as generate_explanation(): a rule-based-fallback cache hit
+    # does NOT short-circuit — it falls through to a live LLM attempt below,
+    # so a care plan cached during a provider outage gets transparently
+    # upgraded once Local/Gemini/Groq is reachable again, without the
+    # clinician re-requesting it or waiting for the cache TTL to expire.
+    # A genuine AI-generated hit still returns immediately as before.
     cached = _check_care_plan_cache(cache_key)
-    if cached is not None:
+    if cached is not None and not cached.fallback_used:
         cached.rag_chunks = chunk_responses
         _log_rag_query(query or "cached-careplan", active_guideline, chunks, method="cache")
         return cached
+    if cached is not None and cached.fallback_used:
+        print(f"[LLM] Cached care plan was rule-based-fallback — attempting live upgrade (key={cache_key})")
 
     _log_rag_query(
         query or _build_query_string(risk_payload, active_guideline),
@@ -896,33 +898,17 @@ def generate_care_plan(
 
     prompt = _build_care_plan_prompt(risk_payload, active_guideline, chunks, previous_assessments)
 
-    # -- 2. Try Gemini --
-    if settings.gemini_api_key:
-        try:
-            raw = _call_gemini(prompt, settings)
-            result = _parse_care_plan_response(raw, chunks, settings.gemini_model, chunk_responses)
-            _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
-                                    chunks, settings.gemini_model, is_simulated=False)
-            print("[Gemini] Care plan success")
-            return result
-        except Exception as e:
-            print(f"[Gemini] Care plan failed ({type(e).__name__}: {e}) -- trying Groq fallback")
-    else:
-        print("[LLM] No GEMINI_API_KEY -- skipping Gemini, trying Groq for care plan")
-
-    # -- 3. Try Groq --
-    if settings.groq_api_key:
-        try:
-            raw = _call_groq(prompt, settings)
-            result = _parse_care_plan_response(raw, chunks, settings.groq_model, chunk_responses)
-            _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
-                                    chunks, settings.groq_model, is_simulated=False)
-            print("[Groq] Care plan success")
-            return result
-        except Exception as e:
-            print(f"[Groq] Care plan failed ({type(e).__name__}: {e}) -- falling back to rule-based")
-    else:
-        print("[LLM] No GROQ_API_KEY -- skipping Groq for care plan")
+    # -- 2. Try the LLM provider chain (Local -> Gemini -> Groq) --
+    try:
+        raw, model_used = call_llm(prompt, settings)
+        result = _parse_care_plan_response(raw, chunks, model_used, chunk_responses)
+        result.fact_check = _maybe_fact_check_care_plan(result, risk_payload, active_guideline, chunks)
+        _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
+                                chunks, model_used, is_simulated=False)
+        print(f"[LLM] Care plan generated via {model_used}")
+        return result
+    except LLMUnavailableError as e:
+        print(f"[LLM] All providers unavailable ({e}) -- using rule-based care plan fallback")
 
     # -- 4. Rule-based final fallback --
     print("[LLM] Both Gemini and Groq unavailable -- using rule-based care plan fallback")
@@ -963,6 +949,7 @@ def _check_care_plan_cache(cache_key: str) -> ClinicalCarePlanResponse | None:
         abx = resp_json.get("antibiotic_plan", {}) or {}
         model_ver = row.get("gemini_model_version", "unknown")
         print(f"[LLM] Care plan cache HIT key={cache_key} model={model_ver} simulated={is_simulated}")
+        fc = resp_json.get("fact_check") or {}
         return ClinicalCarePlanResponse(
             clinical_summary=resp_json.get("clinical_summary", ""),
             risk_analysis=resp_json.get("risk_analysis", ""),
@@ -979,6 +966,7 @@ def _check_care_plan_cache(cache_key: str) -> ClinicalCarePlanResponse | None:
             rag_chunks=[],
             model_version=f"cached:{model_ver}",
             fallback_used=is_simulated,
+            fact_check=FactCheckResult(**fc) if fc else FactCheckResult(),
         )
     except Exception as e:
         print(f"[LLM] Care plan cache check failed (non-fatal): {e}")
@@ -1016,12 +1004,13 @@ def _write_care_plan_cache(
             "escalation_criteria":  result.escalation_criteria,
             "citation_list":        citations_json,
             "confidence_disclaimer": result.confidence_disclaimer,
+            "fact_check":           result.fact_check.model_dump(),
         }
         patient = risk_payload.get("patient", {})
         if hasattr(patient, "model_dump"):
             patient = patient.model_dump()
 
-        supabase.table("llm_explanations").insert({
+        supabase.table("llm_explanations").upsert({
             "cache_key":            cache_key,
             "active_guideline":     active_guideline,
             "is_simulated":         is_simulated,
@@ -1045,7 +1034,7 @@ def _write_care_plan_cache(
             "eoscal_score":         risk_payload.get("total_score", risk_payload.get("combined_score")),
             "risk_category":        category,
             "expires_at":           expires_at,
-        }).execute()
+        }, on_conflict="cache_key").execute()
         print(f"[LLM] Care plan cached key={cache_key} ttl={ttl_h}h model={model_version} simulated={is_simulated}")
     except Exception as e:
         print(f"[LLM] Care plan cache write failed (non-fatal): {e}")
@@ -1118,38 +1107,19 @@ def generate_evidence_overview(
         f'Output plain text only — no markdown, no headers, no bullets.'
     )
 
-    # Try Gemini
-    if settings.gemini_api_key:
-        try:
-            genai.configure(api_key=settings.gemini_api_key)
-            model = genai.GenerativeModel(
-                model_name=settings.gemini_model,
-                generation_config={"temperature": 0.1, "max_output_tokens": 512},
-            )
-            response = model.generate_content(prompt)
-            text = (response.text or "").strip()
-            if text:
-                print(f"[Gemini] Evidence overview OK")
-                return text, True
-        except Exception as e:
-            print(f"[Gemini] Evidence overview failed ({type(e).__name__}) — trying Groq")
-
-    # Try Groq
-    if settings.groq_api_key:
-        try:
-            client = Groq(api_key=settings.groq_api_key)
-            response = client.chat.completions.create(
-                model=settings.groq_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=512,
-            )
-            text = (response.choices[0].message.content or "").strip()
-            if text:
-                print(f"[Groq] Evidence overview OK")
-                return text, True
-        except Exception as e:
-            print(f"[Groq] Evidence overview failed ({type(e).__name__})")
+    try:
+        raw, model_used = call_llm(
+            prompt,
+            system="You are a neonatal sepsis clinical decision support assistant. "
+                   "Respond in plain text only — no markdown, no headers, no bullets, no JSON.",
+            require_json=False,
+        )
+        text = raw.strip()
+        if text:
+            print(f"[LLM] Evidence overview generated via {model_used}")
+            return text, True
+    except LLMUnavailableError as e:
+        print(f"[LLM] Evidence overview: all providers unavailable ({e})")
 
     return "", False
 
@@ -1220,48 +1190,16 @@ def generate_evidence_cards(
                 return parsed[key]
         return []
 
-    # Try Gemini
-    if settings.gemini_api_key:
-        try:
-            genai.configure(api_key=settings.gemini_api_key)
-            model = genai.GenerativeModel(
-                model_name=settings.gemini_model,
-                generation_config={
-                    "response_mime_type": "application/json",
-                    "temperature": 0.1,
-                    "max_output_tokens": 2048,
-                },
-            )
-            response = model.generate_content(prompt)
-            cards = _try_parse_cards(response.text or "")
-            if cards:
-                print(f"[Gemini] Evidence cards OK ({len(cards)} cards)")
-                return cards, True
-        except Exception as e:
-            print(f"[Gemini] Evidence cards failed ({type(e).__name__}) — trying Groq")
-
-    # Try Groq
-    if settings.groq_api_key:
-        try:
-            client = Groq(api_key=settings.groq_api_key)
-            response = client.chat.completions.create(
-                model=settings.groq_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a clinical AI assistant. Respond only with valid JSON.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                max_tokens=2048,
-                response_format={"type": "json_object"},
-            )
-            cards = _try_parse_cards(response.choices[0].message.content or "")
-            if cards:
-                print(f"[Groq] Evidence cards OK ({len(cards)} cards)")
-                return cards, True
-        except Exception as e:
-            print(f"[Groq] Evidence cards failed ({type(e).__name__})")
+    try:
+        raw, model_used = call_llm(
+            prompt,
+            system="You are a clinical AI assistant. Respond only with valid JSON.",
+        )
+        cards = _try_parse_cards(raw)
+        if cards:
+            print(f"[LLM] Evidence cards generated via {model_used} ({len(cards)} cards)")
+            return cards, True
+    except LLMUnavailableError as e:
+        print(f"[LLM] Evidence cards: all providers unavailable ({e})")
 
     return [], False

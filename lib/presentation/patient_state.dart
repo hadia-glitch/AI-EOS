@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../data/auth_service.dart';
+import '../data/local_draft_service.dart';
 import '../data/supabase_config.dart';
 import '../domain/eoscal_calculator.dart';
 
@@ -41,8 +42,30 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
     _loadPatients();
   }
 
+  // ── Local storage scoping ────────────────────────────────────────────────
+  // CRITICAL: when signed out we used to scope local storage under a single
+  // shared 'anonymous' key. That's fine for a single offline user, but if
+  // this device is later used for a second offline signup before the first
+  // one ever syncs, their patient data would collide under the same key.
+  // Now: signed-in users are scoped by their real Supabase user id (as
+  // before); signed-out-but-mid-offline-signup users are scoped by their
+  // local draft id instead, which is unique per pending signup.
+  String? _cachedScopeId;
+
+  Future<String> _resolveScopeId() async {
+    final signedInId = AuthService.instance.currentUser?.id;
+    if (signedInId != null) return signedInId;
+    final draft = await LocalDraftService.instance.getDraft();
+    if (draft != null) return 'draft_${draft.draftId}';
+    return 'anonymous';
+  }
+
+  Future<String> get _storageKeyAsync async {
+    _cachedScopeId ??= await _resolveScopeId();
+    return 'patient_records_${_cachedScopeId!}';
+  }
+
   String get _userId => AuthService.instance.currentUser?.id ?? 'anonymous';
-  String get _storageKey => 'patient_records_$_userId';
   bool get _canUseSupabase => SupabaseConfig.isConfigured && AuthService.instance.isSignedIn;
 
   // ─── Load ───────────────────────────────────────────────────────────────────
@@ -69,12 +92,18 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
     await _loadLocal();
   }
 
-  Future<void> refresh() => _loadPatients();
+  Future<void> refresh() async {
+    // Scope may have changed (e.g. a draft was just created, or the user
+    // just finished syncing) — force it to be re-resolved.
+    _cachedScopeId = null;
+    await _loadPatients();
+  }
 
   Future<void> _loadLocal() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final String? jsonString = prefs.getString(_storageKey);
+      final key = await _storageKeyAsync;
+      final String? jsonString = prefs.getString(key);
       if (jsonString != null) {
         final List<dynamic> decodedList = jsonDecode(jsonString);
         state = decodedList.map((json) => _fromJson(json as Map<String, dynamic>)).toList();
@@ -90,8 +119,36 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
 
   Future<void> _saveLocal() async {
     final prefs = await SharedPreferences.getInstance();
+    final key = _canUseSupabase ? 'patient_records_$_userId' : await _storageKeyAsync;
     final listJson = state.map((p) => _toJson(p)).toList();
-    await prefs.setString(_storageKey, jsonEncode(listJson));
+    await prefs.setString(key, jsonEncode(listJson));
+  }
+
+  /// Called once a pending offline signup has been turned into a real
+  /// Supabase account (see SplashScreen's sync step). Reads whatever was
+  /// cached locally under the draft's scope, re-adds each patient through
+  /// the normal addPatient() path now that we're signed in (which pushes
+  /// them to patient_records/patient_encounters/clinical_assessments/
+  /// risk_results/alerts exactly as if they'd been entered online), then
+  /// deletes the old draft-scoped local cache.
+  Future<void> migrateFromDraft(String draftId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final draftKey = 'patient_records_draft_$draftId';
+    final jsonString = prefs.getString(draftKey);
+    if (jsonString == null) return;
+
+    try {
+      final List<dynamic> decodedList = jsonDecode(jsonString);
+      final draftPatients = decodedList.map((json) => _fromJson(json as Map<String, dynamic>)).toList();
+      _cachedScopeId = null; // now signed in — re-resolve to the real user id
+      for (final patient in draftPatients) {
+        await addPatient(patient);
+      }
+    } catch (e) {
+      debugPrint('Failed to migrate draft patient data: $e');
+    } finally {
+      await prefs.remove(draftKey);
+    }
   }
 
   // ─── Remote: patient_records (mobile cache) ──────────────────────────────────
@@ -211,7 +268,7 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
 
       await client.from('risk_results').insert({
         'encounter_id': patient.id,
-        if (assessmentId != null) 'assessment_id': assessmentId,
+        'assessment_id': ?assessmentId,
         'layer1_score': result.layer1Score,
         'layer2_score': result.layer2Score,
         'layer3_score': result.layer3Score,

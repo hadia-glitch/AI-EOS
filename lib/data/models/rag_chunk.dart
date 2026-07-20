@@ -9,6 +9,10 @@ class RagChunk {
   final String version;
   final int? chunkIndex;
   final int? pageNumber;
+  /// PDF file name (matches guideline_documents.name / evidence_chunks
+  /// metadata.file_name on the backend) — used to look up/download the
+  /// cached local PDF for offline "jump to source" viewing.
+  final String fileName;
 
   const RagChunk({
     required this.chunkId,
@@ -21,6 +25,7 @@ class RagChunk {
     required this.version,
     this.chunkIndex,
     this.pageNumber,
+    this.fileName = '',
   });
 
   factory RagChunk.fromJson(Map<String, dynamic> json) {
@@ -35,6 +40,7 @@ class RagChunk {
       version: json['version'] as String? ?? '1.0',
       chunkIndex: json['chunk_index'] as int?,
       pageNumber: json['page_number'] as int?,
+      fileName: json['file_name'] as String? ?? '',
     );
   }
 

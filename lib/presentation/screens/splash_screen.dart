@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme.dart';
 import '../../data/api/api_client.dart';
 import '../../data/auth_service.dart';
+import '../../data/offline_guideline_cache.dart';
+import '../../data/offline_pdf_cache.dart';
 import '../../data/supabase_config.dart';
 import '../patient_state.dart';
 
@@ -44,6 +47,22 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     setState(() => _status = 'Loading clinical data...');
     await Future.delayed(const Duration(milliseconds: 500));
     final online = await apiClient.isBackendAvailable();
+    if (online) {
+      // Fire-and-forget: refreshes (a) the offline care-plan protocol cache
+      // and (b) the guideline PDF document list (metadata only — actual PDF
+      // bytes download lazily on first "view source" tap, see
+      // OfflinePdfCache). Neither is awaited — must never delay app boot —
+      // and both log-and-swallow their own failures internally.
+      unawaited(OfflineGuidelineCache.sync());
+      unawaited(OfflinePdfCache.syncDocumentList());
+      // Proactively caches every guideline PDF (WiFi-gated by default — see
+      // OfflinePdfCache.syncAllPdfs) so offline "jump to source" works even
+      // for documents the clinician has never manually opened. This also
+      // calls syncDocumentList internally, so the line above is technically
+      // redundant once this completes — kept anyway so the (tiny) document
+      // list is fresh immediately even before a WiFi-gated bulk sync runs.
+      unawaited(OfflinePdfCache.syncAllPdfs());
+    }
 
     // Not configured or not signed in → go to login
     if (!SupabaseConfig.isConfigured || !AuthService.instance.isSignedIn) {

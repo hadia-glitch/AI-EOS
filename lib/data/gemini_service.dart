@@ -1,15 +1,51 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
-import 'package:flutter/foundation.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/eoscal_calculator.dart';
 import 'guidelines_data.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data models
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Result of the backend's Phase-3 fact-checking judge pass (see
+/// backend/rag/fact_check.py). Only runs for HIGH/CRITICAL risk categories —
+/// [performed] is false for LOW/INTERMEDIATE or when no LLM provider was
+/// available, in which case the UI should show nothing rather than implying
+/// an unverified answer failed a check it never ran.
+class FactCheckInfo {
+  final bool performed;
+  final bool verified;
+  final double confidence;
+  final List<String> flaggedClaims;
+  final String notes;
+
+  const FactCheckInfo({
+    this.performed = false,
+    this.verified = true,
+    this.confidence = 1.0,
+    this.flaggedClaims = const [],
+    this.notes = '',
+  });
+
+  factory FactCheckInfo.fromJson(Map<String, dynamic>? j) {
+    if (j == null) return const FactCheckInfo();
+    return FactCheckInfo(
+      performed: j['performed'] as bool? ?? false,
+      verified: j['verified'] as bool? ?? true,
+      confidence: (j['confidence'] as num?)?.toDouble() ?? 1.0,
+      flaggedClaims: (j['flagged_claims'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList(),
+      notes: j['notes'] as String? ?? '',
+    );
+  }
+
+  /// True only when the judge actually ran and found at least one claim
+  /// serious enough to flag verified=false. Drives the warning banner.
+  bool get hasSeriousFlag => performed && !verified;
+}
 
 class StructuredExplanation {
   final String clinicalSummary;
@@ -25,6 +61,8 @@ class StructuredExplanation {
   final bool isSimulated;
   /// Human-readable source label shown in the status banner.
   final String sourceLabel;
+  /// Result of the backend fact-checking judge (HIGH/CRITICAL only).
+  final FactCheckInfo factCheck;
 
   const StructuredExplanation({
     required this.clinicalSummary,
@@ -37,6 +75,7 @@ class StructuredExplanation {
     required this.guidelineCitations,
     this.isSimulated = false,
     this.sourceLabel = '',
+    this.factCheck = const FactCheckInfo(),
   });
 }
 
@@ -90,6 +129,8 @@ class ClinicalCarePlan {
   final bool isSimulated;
   /// Human-readable source label shown in the status banner.
   final String sourceLabel;
+  /// Result of the backend fact-checking judge (HIGH/CRITICAL only).
+  final FactCheckInfo factCheck;
 
   const ClinicalCarePlan({
     required this.clinicalSummary,
@@ -103,6 +144,7 @@ class ClinicalCarePlan {
     required this.guidelineCitations,
     this.isSimulated = false,
     this.sourceLabel = '',
+    this.factCheck = const FactCheckInfo(),
   });
 }
 

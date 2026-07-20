@@ -20,7 +20,6 @@ class HomeDashboard extends ConsumerStatefulWidget {
   ConsumerState<HomeDashboard> createState() => _HomeDashboardState();
 }
 
-
 class _HomeDashboardState extends ConsumerState<HomeDashboard> {
   int _currentIndex = 0;
 
@@ -46,16 +45,19 @@ class _HomeDashboardState extends ConsumerState<HomeDashboard> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.security, color: Colors.white, size: 24),
-            const SizedBox(width: 8),
-            Text(
-              'NEOGUARD AI',
-              style: Theme.of(context).appBarTheme.titleTextStyle,
-            ),
-          ],
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.security, color: Colors.white, size: 24),
+              const SizedBox(width: 8),
+              Text(
+                'NEOGUARD AI',
+                style: Theme.of(context).appBarTheme.titleTextStyle,
+              ),
+            ],
+          ),
         ),
         actions: [
           IconButton(
@@ -70,10 +72,7 @@ class _HomeDashboardState extends ConsumerState<HomeDashboard> {
         ],
       ),
       body: SafeArea(
-        child: IndexedStack(
-          index: _currentIndex,
-          children: tabs,
-        ),
+        child: IndexedStack(index: _currentIndex, children: tabs),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.push('/new-patient'),
@@ -91,7 +90,10 @@ class _HomeDashboardState extends ConsumerState<HomeDashboard> {
         backgroundColor: WhoTheme.primaryNavy,
         selectedItemColor: Colors.white,
         unselectedItemColor: Colors.white60,
-        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+        selectedLabelStyle: const TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+        ),
         unselectedLabelStyle: const TextStyle(fontSize: 11),
         items: const [
           BottomNavigationBarItem(
@@ -189,9 +191,17 @@ class DashboardTab extends ConsumerWidget {
             physics: const NeverScrollableScrollPhysics(),
             childAspectRatio: 1.6,
             children: [
-              _buildStatCard('Critical Sepsis', criticalCount, WhoTheme.riskCritical),
+              _buildStatCard(
+                'Critical Sepsis',
+                criticalCount,
+                WhoTheme.riskCritical,
+              ),
               _buildStatCard('High Risk', highCount, WhoTheme.riskHigh),
-              _buildStatCard('Intermediate Risk', intermediateCount, WhoTheme.riskIntermediate),
+              _buildStatCard(
+                'Intermediate Risk',
+                intermediateCount,
+                WhoTheme.riskIntermediate,
+              ),
               _buildStatCard('Low Risk', lowCount, WhoTheme.riskLow),
             ],
           ),
@@ -201,7 +211,9 @@ class DashboardTab extends ConsumerWidget {
           Card(
             color: WhoTheme.lightBlueBackground,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -274,7 +286,7 @@ class DashboardTab extends ConsumerWidget {
         border: Border(left: BorderSide(color: color, width: 6)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 6,
             offset: const Offset(0, 2),
           ),
@@ -285,21 +297,27 @@ class DashboardTab extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: WhoTheme.neutralDarkGrey,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: WhoTheme.neutralDarkGrey,
+              ),
             ),
           ),
           const SizedBox(height: 4),
-          Text(
-            '$value',
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: color,
+          FittedBox(
+            child: Text(
+              '$value',
+              style: TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
             ),
           ),
         ],
@@ -321,7 +339,8 @@ class PatientsTab extends ConsumerWidget {
 
     final filteredPatients = patients.where((p) {
       final query = searchQuery.toLowerCase();
-      return p.name.toLowerCase().contains(query) || p.mrn.toLowerCase().contains(query);
+      return p.name.toLowerCase().contains(query) ||
+          p.mrn.toLowerCase().contains(query);
     }).toList();
 
     return Padding(
@@ -335,7 +354,8 @@ class PatientsTab extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           TextField(
-            onChanged: (val) => ref.read(searchQueryProvider.notifier).state = val,
+            onChanged: (val) =>
+                ref.read(searchQueryProvider.notifier).state = val,
             decoration: InputDecoration(
               hintText: 'Search patients by name or MRN...',
               prefixIcon: const Icon(Icons.search, color: WhoTheme.primaryNavy),
@@ -387,10 +407,14 @@ class _EvidenceTabState extends State<EvidenceTab> {
   @override
   Widget build(BuildContext context) {
     final filteredChunks = GuidelinesData.chunks.where((chunk) {
-      final matchesSource = _selectedSource == 'ALL' || chunk.source == _selectedSource;
-      final matchesSearch = chunk.content.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+      final matchesSource =
+          _selectedSource == 'ALL' || chunk.source == _selectedSource;
+      final matchesSearch =
+          chunk.content.toLowerCase().contains(_searchQuery.toLowerCase()) ||
           chunk.section.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          chunk.keywords.any((k) => k.toLowerCase().contains(_searchQuery.toLowerCase()));
+          chunk.keywords.any(
+            (k) => k.toLowerCase().contains(_searchQuery.toLowerCase()),
+          );
       return matchesSource && matchesSearch;
     }).toList();
 
@@ -428,11 +452,15 @@ class _EvidenceTabState extends State<EvidenceTab> {
                   child: FilterChip(
                     label: Text(source),
                     selected: isSelected,
-                    selectedColor: WhoTheme.primaryNavy.withOpacity(0.15),
+                    selectedColor: WhoTheme.primaryNavy.withValues(alpha: 0.15),
                     checkmarkColor: WhoTheme.primaryNavy,
                     labelStyle: TextStyle(
-                      color: isSelected ? WhoTheme.primaryNavy : WhoTheme.neutralDarkGrey,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected
+                          ? WhoTheme.primaryNavy
+                          : WhoTheme.neutralDarkGrey,
+                      fontWeight: isSelected
+                          ? FontWeight.bold
+                          : FontWeight.normal,
                     ),
                     onSelected: (selected) {
                       setState(() {
@@ -465,12 +493,18 @@ class _EvidenceTabState extends State<EvidenceTab> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
                                     decoration: BoxDecoration(
-                                      color: WhoTheme.primaryNavy.withOpacity(0.1),
+                                      color: WhoTheme.primaryNavy.withValues(
+                                        alpha: 0.1,
+                                      ),
                                       borderRadius: BorderRadius.circular(4),
                                     ),
                                     child: Text(
@@ -507,7 +541,10 @@ class _EvidenceTabState extends State<EvidenceTab> {
                                 runSpacing: 4,
                                 children: chunk.keywords.map((k) {
                                   return Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: Colors.grey.shade100,
                                       borderRadius: BorderRadius.circular(4),
@@ -555,13 +592,15 @@ class _AlertsTabState extends ConsumerState<AlertsTab> {
     for (var p in patients) {
       final res = EoscalCalculator.calculate(p);
       // High or critical risks trigger clinical warning items
-      if (res.riskCategory == RiskCategory.critical || res.riskCategory == RiskCategory.high) {
+      if (res.riskCategory == RiskCategory.critical ||
+          res.riskCategory == RiskCategory.high) {
         activeAlerts.add({
           'patient': p,
           'result': res,
           'type': 'risk',
           'severity': res.riskCategory,
-          'message': 'Patient has a high EOSCAL score of ${res.totalScore}. Initiate clinical protocols.',
+          'message':
+              'Patient has a high EOSCAL score of ${res.totalScore}. Initiate clinical protocols.',
         });
       }
       // Premature warning
@@ -571,7 +610,8 @@ class _AlertsTabState extends ConsumerState<AlertsTab> {
           'result': res,
           'type': 'preterm',
           'severity': RiskCategory.intermediate,
-          'message': 'Premature gestation (${p.gestationalAgeWeeks} weeks). Interpret calculations with caution.',
+          'message':
+              'Premature gestation (${p.gestationalAgeWeeks} weeks). Interpret calculations with caution.',
         });
       }
       // Blood culture alerts
@@ -607,11 +647,18 @@ class _AlertsTabState extends ConsumerState<AlertsTab> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.check_circle_outline, size: 64, color: WhoTheme.riskLow),
+                        Icon(
+                          Icons.check_circle_outline,
+                          size: 64,
+                          color: WhoTheme.riskLow,
+                        ),
                         const SizedBox(height: 12),
                         const Text(
                           'No critical alerts active.',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -633,12 +680,21 @@ class _AlertsTabState extends ConsumerState<AlertsTab> {
                         margin: const EdgeInsets.only(bottom: 12),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
-                          side: BorderSide(color: severity.color.withOpacity(0.4), width: 1),
+                          side: BorderSide(
+                            color: severity.color.withValues(alpha: 0.4),
+                            width: 1,
+                          ),
                         ),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: severity.color.withOpacity(0.15),
-                            child: Icon(Icons.warning, color: severity.color, size: 20),
+                            backgroundColor: severity.color.withValues(
+                              alpha: 0.15,
+                            ),
+                            child: Icon(
+                              Icons.warning,
+                              color: severity.color,
+                              size: 20,
+                            ),
                           ),
                           title: Text(
                             patient.name,
@@ -654,20 +710,29 @@ class _AlertsTabState extends ConsumerState<AlertsTab> {
                                 children: [
                                   Text(
                                     'Score: ${result.totalScore} | MRN: ${patient.mrn}',
-                                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade600,
+                                    ),
                                   ),
                                 ],
                               ),
                             ],
                           ),
                           isThreeLine: true,
-                          trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                          trailing: const Icon(
+                            Icons.arrow_forward_ios,
+                            size: 14,
+                          ),
                           onTap: () {
                             final guideline = ref.read(activeGuidelineProvider);
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => PatientDetailScreen(patient: patient, activeGuideline: guideline),
+                                builder: (context) => PatientDetailScreen(
+                                  patient: patient,
+                                  activeGuideline: guideline,
+                                ),
                               ),
                             );
                           },
@@ -708,7 +773,8 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
     if (key != null && key.isNotEmpty) {
       setState(() {
         _apiKeyController.text = key;
-        _maskedKey = '••••••••••••••••' + key.substring(key.length > 6 ? key.length - 6 : 0);
+        _maskedKey =
+            '••••••••••••••••${key.substring(key.length > 6 ? key.length - 6 : 0)}';
       });
     } else {
       setState(() {
@@ -756,7 +822,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
               children: [
                 RadioListTile<String>(
                   title: const Text('NICE (UK - NG195) Sepsis Guideline'),
-                  subtitle: const Text('Strict timeline-based treatment with 1-hour limits'),
+                  subtitle: const Text(
+                    'Strict timeline-based treatment with 1-hour limits',
+                  ),
                   value: 'NICE',
                   groupValue: activeGuideline,
                   onChanged: (val) {
@@ -766,7 +834,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                 const Divider(height: 1),
                 RadioListTile<String>(
                   title: const Text('AAP (US - 2023) Management Guideline'),
-                  subtitle: const Text('Appearance-based and risk factor enhanced monitoring'),
+                  subtitle: const Text(
+                    'Appearance-based and risk factor enhanced monitoring',
+                  ),
                   value: 'AAP',
                   groupValue: activeGuideline,
                   onChanged: (val) {
@@ -776,7 +846,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                 const Divider(height: 1),
                 RadioListTile<String>(
                   title: const Text('WHO (Global) Sepsis Guideline'),
-                  subtitle: const Text('Clinical danger signs and resource-optimized therapy'),
+                  subtitle: const Text(
+                    'Clinical danger signs and resource-optimized therapy',
+                  ),
                   value: 'WHO',
                   groupValue: activeGuideline,
                   onChanged: (val) {
@@ -813,7 +885,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                   Text(
                     _maskedKey,
                     style: TextStyle(
-                      color: _apiKeyController.text.isEmpty ? WhoTheme.riskIntermediate : WhoTheme.riskLow,
+                      color: _apiKeyController.text.isEmpty
+                          ? WhoTheme.riskIntermediate
+                          : WhoTheme.riskLow,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -845,7 +919,9 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                             await _loadKey();
                             if (!mounted) return;
                             ScaffoldMessenger.of(this.context).showSnackBar(
-                              const SnackBar(content: Text('API Key configuration updated.')),
+                              const SnackBar(
+                                content: Text('API Key configuration updated.'),
+                              ),
                             );
                           },
                           child: const Text('Save'),
@@ -869,9 +945,13 @@ class _SettingsTabState extends ConsumerState<SettingsTab> {
                           _isEditing = true;
                         });
                       },
-                      child: Text(_apiKeyController.text.isEmpty ? 'Setup API Key' : 'Change API Key'),
+                      child: Text(
+                        _apiKeyController.text.isEmpty
+                            ? 'Setup API Key'
+                            : 'Change API Key',
+                      ),
                     ),
-                  ]
+                  ],
                 ],
               ),
             ),
@@ -965,7 +1045,10 @@ class PatientListTile extends ConsumerWidget {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => PatientDetailScreen(patient: patient, activeGuideline: guideline),
+              builder: (context) => PatientDetailScreen(
+                patient: patient,
+                activeGuideline: guideline,
+              ),
             ),
           );
         },
@@ -978,7 +1061,7 @@ class PatientListTile extends ConsumerWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: riskColor.withOpacity(0.12),
+                  color: riskColor.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                   border: Border.all(color: riskColor, width: 2),
                 ),
@@ -1010,6 +1093,8 @@ class PatientListTile extends ConsumerWidget {
                     const SizedBox(height: 2),
                     Text(
                       'MRN: ${patient.mrn}  •  GA: ${patient.gestationalAgeWeeks}w  •  Age: ${ageHours}h',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade600,
@@ -1018,20 +1103,29 @@ class PatientListTile extends ConsumerWidget {
                     if (patient.gestationalAgeWeeks < 35.0) ...[
                       const SizedBox(height: 4),
                       Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.warning, color: WhoTheme.riskIntermediate, size: 14),
+                          Icon(
+                            Icons.warning,
+                            color: WhoTheme.riskIntermediate,
+                            size: 14,
+                          ),
                           const SizedBox(width: 4),
-                          const Text(
-                            'Premature infant (<35 weeks)',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: WhoTheme.riskIntermediate,
-                              fontWeight: FontWeight.w600,
+                          Expanded(
+                            child: const Text(
+                              'Premature infant (<35 weeks)',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: WhoTheme.riskIntermediate,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ],
                       ),
-                    ]
+                    ],
                   ],
                 ),
               ),
@@ -1041,7 +1135,10 @@ class PatientListTile extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: riskColor,
                       borderRadius: BorderRadius.circular(4),
@@ -1087,7 +1184,11 @@ class PatientListTile extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                  const Icon(
+                    Icons.arrow_forward_ios,
+                    size: 14,
+                    color: Colors.grey,
+                  ),
                 ],
               ),
             ],

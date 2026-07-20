@@ -52,7 +52,9 @@ class _RiskResultsTabState extends ConsumerState<RiskResultsTab> {
               margin: const EdgeInsets.only(top: 8),
               padding: const EdgeInsets.all(12),
               color: WhoTheme.riskIntermediate.withValues(alpha: 0.2),
-              child: const Text('⚠ Below EOSCAL 2024 validated scope (≥35 weeks)'),
+              child: const Text(
+                '⚠ Below EOSCAL 2024 validated scope (≥35 weeks)',
+              ),
             ),
           const SizedBox(height: 16),
           LayerStrip(result: result),
@@ -61,7 +63,9 @@ class _RiskResultsTabState extends ConsumerState<RiskResultsTab> {
             result: result,
             onDriverTap: (d) => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => XaiDetailScreen(driver: d, result: result)),
+              MaterialPageRoute(
+                builder: (_) => XaiDetailScreen(driver: d, result: result),
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -83,11 +87,22 @@ class _RiskResultsTabState extends ConsumerState<RiskResultsTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
                     children: [
-                      const Text('Recommended Actions', style: TextStyle(fontWeight: FontWeight.bold)),
-                      const Spacer(),
-                      Chip(label: Text(_guideline), backgroundColor: WhoTheme.secondaryTeal.withValues(alpha: 0.2)),
+                      const Text(
+                        'Recommended Actions',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      Chip(
+                        label: Text(_guideline),
+                        backgroundColor: WhoTheme.secondaryTeal.withValues(
+                          alpha: 0.2,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -113,7 +128,9 @@ class _RiskResultsTabState extends ConsumerState<RiskResultsTab> {
                 ),
                 icon: const Icon(Icons.psychology),
                 label: const Text('View Clinical Explanation →'),
-                style: OutlinedButton.styleFrom(foregroundColor: WhoTheme.secondaryTeal),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: WhoTheme.secondaryTeal,
+                ),
               ),
             ),
           ],
