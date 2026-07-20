@@ -228,6 +228,13 @@ class ExplanationApi {
       isSimulated: isSimulated,
       sourceLabel: sourceLabel,
       factCheck: FactCheckInfo.fromJson(data['fact_check'] as Map<String, dynamic>?),
+      nutritionFluidPlan: data['nutrition_fluid_plan'] as String? ?? '',
+      parentCommunicationNotes: data['parent_communication_notes'] as String? ?? '',
+      disambiguationBlock: data['disambiguation_block'] as String? ?? '',
+      contraindicationFlags: (data['contraindication_flags'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList(),
+      trendStateChange: data['trend_state_change'] as String? ?? '',
     );
   }
 

@@ -166,7 +166,10 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
 
   // ─── Remote: patient_encounters + clinical_assessments + risk_results ────────
 
-  List<Map<String, dynamic>> _computeAlerts(PatientParameters p) {
+  List<Map<String, dynamic>> _computeAlerts(
+    PatientParameters p, {
+    List<Map<String, dynamic>> recentDeltas = const [],
+  }) {
     final List<Map<String, dynamic>> alerts = [];
     final res = EoscalCalculator.calculate(p);
 
@@ -191,7 +194,53 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
         'message': 'CONFIRMED BACTEREMIA. Blood culture returned positive.',
       });
     }
+
+    if (recentDeltas.length >= 2) {
+      final lastTwo = recentDeltas.sublist(recentDeltas.length - 2);
+      final crpRising = lastTwo.every((d) {
+        final delta = d['crp_delta'];
+        return delta != null && (delta as num) > 0;
+      });
+      if (crpRising) {
+        alerts.add({
+          'type': 'CRP_RISING_TREND',
+          'priority': 'HIGH',
+          'message': 'CRP rising across consecutive assessments — review inflammatory trend.',
+        });
+      }
+
+      const tempThreshold = 0.5;
+      final tempUnstable = lastTwo.every((d) {
+        final delta = d['temp_delta'];
+        return delta != null && (delta as num).abs() >= tempThreshold;
+      });
+      if (tempUnstable) {
+        alerts.add({
+          'type': 'TEMP_INSTABILITY_TREND',
+          'priority': 'MEDIUM',
+          'message': 'Temperature instability across consecutive assessments — monitor closely.',
+        });
+      }
+    }
+
     return alerts;
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchRecentAssessmentDeltas(
+    dynamic client,
+    String encounterId,
+  ) async {
+    try {
+      final rows = await client
+          .from('assessment_deltas')
+          .select('crp_delta, temp_delta, score_delta, created_at')
+          .eq('encounter_id', encounterId)
+          .order('created_at', ascending: true);
+      return (rows as List<dynamic>).cast<Map<String, dynamic>>();
+    } catch (e) {
+      debugPrint('assessment_deltas query failed: $e');
+      return [];
+    }
   }
 
   /// Upserts a row in patient_encounters, inserts a new clinical_assessment,
@@ -218,10 +267,17 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
 
     String? assessmentId;
     try {
-      // 2. clinical_assessments — new row per save (insert)
+      final priorRows = await client
+          .from('clinical_assessments')
+          .select('id')
+          .eq('encounter_id', patient.id)
+          .limit(1);
+      final hasPriorAssessment = (priorRows as List<dynamic>).isNotEmpty;
+      final eventType = hasPriorAssessment ? 'reassessment' : 'initial';
+
       final assessmentRow = await client.from('clinical_assessments').insert({
         'encounter_id': patient.id,
-        'event_type': 'initial',
+        'event_type': eventType,
         'maternal_data': {
           'maternal_temperature': patient.maternalTemperature,
           'rom_hours': patient.romHours,
@@ -229,6 +285,7 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
           'adequate_intrapartum_antibiotics': patient.adequateIntrapartumAntibiotics,
           'clinical_chorioamnionitis': patient.clinicalChorioamnionitis,
           'delivery_mode': patient.deliveryMode,
+          if (patient.penicillinAllergy != null) 'penicillin_allergy': patient.penicillinAllergy,
         },
         'neonatal_data': {
           'respiratory_distress': patient.respiratoryDistress,
@@ -246,6 +303,8 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
           if (patient.crpLevel != null) 'crp_level': patient.crpLevel,
           if (patient.pctLevel != null) 'pct_level': patient.pctLevel,
           if (patient.bloodCulturePositive != null) 'blood_culture_positive': patient.bloodCulturePositive,
+          if (patient.urineOutputMlKgHr != null) 'urine_output_ml_kg_hr': patient.urineOutputMlKgHr,
+          if (patient.creatinineMgDl != null) 'creatinine_mg_dl': patient.creatinineMgDl,
         },
         'created_at': now,
       }).select('id').single();
@@ -286,7 +345,8 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
     try {
       // 4. alerts — sync active alerts (delete obsolete, insert current)
       await client.from('alerts').delete().eq('encounter_id', patient.id);
-      final activeAlerts = _computeAlerts(patient);
+      final recentDeltas = await _fetchRecentAssessmentDeltas(client, patient.id);
+      final activeAlerts = _computeAlerts(patient, recentDeltas: recentDeltas);
       for (final alert in activeAlerts) {
         await client.from('alerts').insert({
           'encounter_id': patient.id,
@@ -363,6 +423,9 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
       'crpLevel': p.crpLevel,
       'pctLevel': p.pctLevel,
       'bloodCulturePositive': p.bloodCulturePositive,
+      'urineOutputMlKgHr': p.urineOutputMlKgHr,
+      'creatinineMgDl': p.creatinineMgDl,
+      'penicillinAllergy': p.penicillinAllergy,
     };
   }
 
@@ -391,6 +454,9 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
       crpLevel: json['crpLevel'] != null ? (json['crpLevel'] as num).toDouble() : null,
       pctLevel: json['pctLevel'] != null ? (json['pctLevel'] as num).toDouble() : null,
       bloodCulturePositive: json['bloodCulturePositive'] as bool?,
+      urineOutputMlKgHr: json['urineOutputMlKgHr'] != null ? (json['urineOutputMlKgHr'] as num).toDouble() : null,
+      creatinineMgDl: json['creatinineMgDl'] != null ? (json['creatinineMgDl'] as num).toDouble() : null,
+      penicillinAllergy: json['penicillinAllergy'] as bool?,
     );
   }
 }

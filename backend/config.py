@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # OpenAI-compatible chat completions endpoint: Ollama's own
     # (http://localhost:11434/v1) or a production vLLM server
     # (http://<vllm-host>:8000/v1) both work without further code changes.
+    # Master switch: true = use local Ollama/vLLM first; false = skip local,
+    # use Gemini/Groq cloud chain directly. Flip this single bool in .env.
+    use_local_llm: bool = True
+
     local_llm_enabled: bool = True
     local_llm_base_url: str = "http://localhost:11434/v1"
     local_llm_model: str = "mistral:7b-instruct-q4_K_M"
@@ -107,6 +111,10 @@ class Settings(BaseSettings):
     embedding_dim: int = 384
 
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # Ablation switch: "fixed" (default) | "semantic" | "proposition"
+    chunking_strategy: str = "fixed"
+    # Ablation switch: when True, query_refiner runs before retrieval
+    enable_query_refinement: bool = False
     chunk_size: int = 512
     chunk_overlap: int = 50
     rrf_k: int = 60

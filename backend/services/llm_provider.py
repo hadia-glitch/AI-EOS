@@ -195,10 +195,10 @@ def _build_chain(settings) -> list[tuple[str, Callable, str]]:
     """Returns [(provider_name, call_fn, model_version), ...] in try-order."""
     chain: list[tuple[str, Callable, str]] = []
 
-    if settings.local_llm_enabled:
+    if settings.use_local_llm and settings.local_llm_enabled:
         chain.append(("Local", _call_local, settings.local_llm_model))
 
-    if not settings.disable_cloud_llm_fallback:
+    if not settings.use_local_llm or not settings.disable_cloud_llm_fallback:
         if settings.gemini_api_key:
             chain.append(("Gemini", _call_gemini, settings.gemini_model))
         if settings.groq_api_key:

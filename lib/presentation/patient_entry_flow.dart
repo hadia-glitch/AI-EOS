@@ -49,7 +49,10 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
   final _plateletsController = TextEditingController();
   final _crpController = TextEditingController();
   final _pctController = TextEditingController();
+  final _urineOutputController = TextEditingController();
+  final _creatinineController = TextEditingController();
   bool _bloodCulturePositive = false;
+  bool _penicillinAllergy = false;
 
   @override
   void initState() {
@@ -83,6 +86,13 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
       if (p.crpLevel != null) _crpController.text = p.crpLevel!.toString();
       if (p.pctLevel != null) _pctController.text = p.pctLevel!.toString();
       _bloodCulturePositive = p.bloodCulturePositive ?? false;
+      if (p.urineOutputMlKgHr != null) {
+        _urineOutputController.text = p.urineOutputMlKgHr!.toString();
+      }
+      if (p.creatinineMgDl != null) {
+        _creatinineController.text = p.creatinineMgDl!.toString();
+      }
+      _penicillinAllergy = p.penicillinAllergy ?? false;
     }
   }
 
@@ -95,6 +105,8 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
     _plateletsController.dispose();
     _crpController.dispose();
     _pctController.dispose();
+    _urineOutputController.dispose();
+    _creatinineController.dispose();
     super.dispose();
   }
 
@@ -136,6 +148,9 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
       crpLevel: double.tryParse(_crpController.text),
       pctLevel: double.tryParse(_pctController.text),
       bloodCulturePositive: _bloodCulturePositive,
+      urineOutputMlKgHr: double.tryParse(_urineOutputController.text),
+      creatinineMgDl: double.tryParse(_creatinineController.text),
+      penicillinAllergy: _penicillinAllergy,
     );
   }
 
@@ -863,6 +878,37 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
             hintText: 'ng/mL (normal: <0.5 ng/mL)',
             suffixText: 'ng/mL',
           ),
+        ),
+        const SizedBox(height: 16),
+
+        TextFormField(
+          controller: _urineOutputController,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: 'Urine Output',
+            hintText: 'mL/kg/hr (normal: ≥1.0)',
+            suffixText: 'mL/kg/hr',
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        TextFormField(
+          controller: _creatinineController,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: 'Serum Creatinine',
+            hintText: 'mg/dL',
+            suffixText: 'mg/dL',
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        SwitchListTile(
+          title: const Text('Penicillin Allergy'),
+          subtitle: const Text('Documented beta-lactam allergy'),
+          value: _penicillinAllergy,
+          activeThumbColor: WhoTheme.riskCritical,
+          onChanged: (val) => setState(() => _penicillinAllergy = val),
         ),
         const SizedBox(height: 16),
 

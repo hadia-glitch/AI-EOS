@@ -66,6 +66,9 @@ class PatientParameters {
   final double? crpLevel; // mg/L
   final double? pctLevel; // ng/mL
   final bool? bloodCulturePositive;
+  final double? urineOutputMlKgHr;
+  final double? creatinineMgDl;
+  final bool? penicillinAllergy;
 
   PatientParameters({
     required this.id,
@@ -91,6 +94,9 @@ class PatientParameters {
     this.crpLevel,
     this.pctLevel,
     this.bloodCulturePositive,
+    this.urineOutputMlKgHr,
+    this.creatinineMgDl,
+    this.penicillinAllergy,
   });
 
   // CopyWith helper
@@ -118,6 +124,9 @@ class PatientParameters {
     double? crpLevel,
     double? pctLevel,
     bool? bloodCulturePositive,
+    double? urineOutputMlKgHr,
+    double? creatinineMgDl,
+    bool? penicillinAllergy,
   }) {
     return PatientParameters(
       id: id ?? this.id,
@@ -143,6 +152,9 @@ class PatientParameters {
       crpLevel: crpLevel ?? this.crpLevel,
       pctLevel: pctLevel ?? this.pctLevel,
       bloodCulturePositive: bloodCulturePositive ?? this.bloodCulturePositive,
+      urineOutputMlKgHr: urineOutputMlKgHr ?? this.urineOutputMlKgHr,
+      creatinineMgDl: creatinineMgDl ?? this.creatinineMgDl,
+      penicillinAllergy: penicillinAllergy ?? this.penicillinAllergy,
     );
   }
 }

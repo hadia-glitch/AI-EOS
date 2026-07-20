@@ -9,6 +9,9 @@ class DeidentifiedPatient {
   final String? respiratoryDistress;
   final double? crpLevel;
   final bool? bloodCulturePositive;
+  final double? urineOutputMlKgHr;
+  final double? creatinineMgDl;
+  final bool? penicillinAllergy;
 
   const DeidentifiedPatient({
     this.gestationalAgeWeeks,
@@ -18,6 +21,9 @@ class DeidentifiedPatient {
     this.respiratoryDistress,
     this.crpLevel,
     this.bloodCulturePositive,
+    this.urineOutputMlKgHr,
+    this.creatinineMgDl,
+    this.penicillinAllergy,
   });
 
   Map<String, dynamic> toJson() => {
@@ -28,6 +34,9 @@ class DeidentifiedPatient {
         if (respiratoryDistress != null) 'respiratory_distress': respiratoryDistress,
         if (crpLevel != null) 'crp_level': crpLevel,
         if (bloodCulturePositive != null) 'blood_culture_positive': bloodCulturePositive,
+        if (urineOutputMlKgHr != null) 'urine_output_ml_kg_hr': urineOutputMlKgHr,
+        if (creatinineMgDl != null) 'creatinine_mg_dl': creatinineMgDl,
+        if (penicillinAllergy != null) 'penicillin_allergy': penicillinAllergy,
       };
 
   static DeidentifiedPatient fromPatient(PatientParameters p) {
@@ -39,6 +48,9 @@ class DeidentifiedPatient {
       respiratoryDistress: p.respiratoryDistress,
       crpLevel: p.crpLevel,
       bloodCulturePositive: p.bloodCulturePositive,
+      urineOutputMlKgHr: p.urineOutputMlKgHr,
+      creatinineMgDl: p.creatinineMgDl,
+      penicillinAllergy: p.penicillinAllergy,
     );
   }
 }

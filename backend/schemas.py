@@ -34,6 +34,9 @@ class PatientSnapshot(BaseModel):
     respiratory_distress: str | None = None
     crp_level: float | None = None
     blood_culture_positive: bool | None = None
+    urine_output_ml_kg_hr: float | None = None
+    creatinine_mg_dl: float | None = None
+    penicillin_allergy: bool | None = None
 
 
 class RiskPayload(BaseModel):
@@ -128,6 +131,11 @@ class ClinicalCarePlanResponse(BaseModel):
     generated_offline: bool = False
     fallback_used: bool = False
     fact_check: FactCheckResult = Field(default_factory=FactCheckResult)
+    nutrition_fluid_plan: str = ""
+    parent_communication_notes: str = ""
+    disambiguation_block: str = ""
+    contraindication_flags: list[str] = Field(default_factory=list)
+    trend_state_change: str = ""
 
 
 class RagHealthResponse(BaseModel):

@@ -25,6 +25,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from config import get_settings
 from db import get_supabase
 from rag.document_mapping import DocumentMeta, infer_document_meta
+from services.llm_provider import LLMUnavailableError, call_llm
 
 
 # ── Noise patterns to strip from PDF text ─────────────────────────────────────
@@ -209,6 +210,116 @@ def _extract_section_title(text: str, chunk_index: int, doc_section_map: dict) -
     return first_sentence if len(first_sentence) > 10 else f"Section {chunk_index + 1}"
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Extract sentences via spaCy; fall back to regex if spaCy unavailable."""
+    try:
+        import spacy
+        nlp = spacy.load("en_core_web_sm")
+        doc = nlp(text)
+        return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 20]
+    except Exception:
+        import re
+        parts = re.split(r"(?<=[.!?])\s+", text)
+        return [p.strip() for p in parts if len(p.strip()) > 20]
+
+
+def _semantic_chunks(text: str, metadata: dict) -> list[tuple[str, dict]]:
+    """
+    spaCy sentences -> TF-IDF -> K-means clustering -> chronological concat.
+    k = max(3, min(20, len(sentences) // 15)) — scales with document length.
+    """
+    sentences = _split_sentences(text)
+    if len(sentences) < 3:
+        return [(text, metadata)]
+
+    from sklearn.cluster import KMeans
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    # k formula for paper methods section — do not hardcode k=6 globally.
+    k = max(3, min(20, len(sentences) // 15))
+    k = min(k, len(sentences))
+
+    vectorizer = TfidfVectorizer(max_features=500)
+    matrix = vectorizer.fit_transform(sentences)
+    labels = KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(matrix)
+
+    clusters: dict[int, list[str]] = {}
+    for idx, label in enumerate(labels):
+        clusters.setdefault(int(label), []).append(sentences[idx])
+
+    chunks: list[tuple[str, dict]] = []
+    for cluster_id in sorted(clusters.keys()):
+        chunk_text = " ".join(clusters[cluster_id])
+        meta = dict(metadata)
+        meta["chunking_strategy"] = "semantic"
+        meta["semantic_cluster"] = cluster_id
+        chunks.append((chunk_text, meta))
+    return chunks
+
+
+def _proposition_chunks(text: str, metadata: dict, settings) -> list[tuple[str, dict]]:
+    """Split section text into single-fact assertions via local LLM."""
+    section = metadata.get("section", "General")
+    prompt = f"""Split the following clinical guideline section into single-fact assertions.
+Each assertion must be one standalone factual claim. Preserve clinical accuracy.
+Return ONLY valid JSON: {{"propositions": ["fact 1", "fact 2", ...]}}
+
+SECTION ({section}):
+{text[:4000]}"""
+
+    try:
+        raw, _ = call_llm(
+            prompt,
+            settings=settings,
+            system="You extract atomic clinical facts. Respond with valid JSON only.",
+        )
+        body = raw.strip()
+        if body.startswith("```"):
+            body = body.split("```", 2)[1]
+            if body.startswith("json"):
+                body = body[4:]
+            body = body.rsplit("```", 1)[0].strip()
+        import json
+        data = json.loads(body)
+        props = [str(p).strip() for p in data.get("propositions", []) if str(p).strip()]
+    except (LLMUnavailableError, Exception):
+        props = _split_sentences(text)
+
+    if not props:
+        return [(text, metadata)]
+
+    chunks: list[tuple[str, dict]] = []
+    for i, prop in enumerate(props):
+        meta = dict(metadata)
+        meta["chunking_strategy"] = "proposition"
+        meta["proposition_index"] = i
+        chunks.append((prop, meta))
+    return chunks
+
+
+def _chunk_document_text(
+    text: str,
+    metadata: dict,
+    settings,
+) -> list[tuple[str, dict]]:
+    """Dispatch to fixed / semantic / proposition chunking per config."""
+    strategy = (settings.chunking_strategy or "fixed").lower()
+
+    if strategy == "semantic":
+        return _semantic_chunks(text, metadata)
+
+    if strategy == "proposition":
+        return _proposition_chunks(text, metadata, settings)
+
+    splitter = SentenceSplitter(
+        chunk_size=settings.chunk_size,
+        chunk_overlap=settings.chunk_overlap,
+    )
+    doc = Document(text=text, metadata=metadata)
+    nodes = splitter.get_nodes_from_documents([doc])
+    return [(node.get_content(), dict(metadata)) for node in nodes]
+
+
 # ── PDF loading ────────────────────────────────────────────────────────────────
 
 def load_pdf_documents(directory: Path) -> list[tuple[Document, DocumentMeta]]:
@@ -273,11 +384,6 @@ def ingest_directory(
     embed_model = HuggingFaceEmbedding(model_name=settings.embedding_model)
     LlamaSettings.embed_model = embed_model
 
-    splitter = SentenceSplitter(
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap,
-    )
-
     supabase = get_supabase()
     ingestion_date = datetime.now(timezone.utc).isoformat()
     total_inserted = 0
@@ -338,39 +444,44 @@ def ingest_directory(
         section_map: dict = {}
 
         for doc in docs:
-            nodes = splitter.get_nodes_from_documents([doc])
-            for node in nodes:
-                text = node.get_content()
+            text = doc.get_content()
+            if _is_noise_chunk(text):
+                total_skipped += 1
+                continue
+            text = _clean_text(text)
+            if _is_noise_chunk(text):
+                total_skipped += 1
+                continue
 
-                # Skip noise chunks
-                if _is_noise_chunk(text):
+            base_meta = {
+                "file_name": file_name,
+                "source": meta.source,
+                "page_number": doc.metadata.get("page_label"),
+            }
+            text_chunks = _chunk_document_text(text, base_meta, settings)
+
+            for chunk_text, chunk_meta in text_chunks:
+                if _is_noise_chunk(chunk_text):
                     total_skipped += 1
                     continue
 
-                # Final clean pass on the chunk itself
-                text = _clean_text(text)
-                if _is_noise_chunk(text):
-                    total_skipped += 1
-                    continue
-
-                embedding = embed_model.get_text_embedding(text)
-                section = _extract_section_title(text, chunk_index, section_map)
+                embedding = embed_model.get_text_embedding(chunk_text)
+                section = _extract_section_title(chunk_text, chunk_index, section_map)
 
                 batch.append({
                     "document_id": document_id,
-                    "chunk_text": text,
+                    "chunk_text": chunk_text,
                     "embedding": embedding,
                     "section": section,
-                    "page_number": node.metadata.get("page_label"),
+                    "page_number": chunk_meta.get("page_number"),
                     "chunk_index": chunk_index,
                     "source_name": meta.source_name,
                     "version": meta.version,
                     "region_tag": meta.region_tag,
                     "ingestion_date": ingestion_date,
                     "metadata": {
-                        "file_name": file_name,
-                        "source": meta.source,
-                        "node_id": hashlib.md5(text[:200].encode()).hexdigest()[:12],
+                        **chunk_meta,
+                        "node_id": hashlib.md5(chunk_text[:200].encode()).hexdigest()[:12],
                     },
                 })
                 chunk_index += 1

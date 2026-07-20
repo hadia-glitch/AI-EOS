@@ -13,6 +13,7 @@ import '../../data/models/rag_chunk.dart';
 import '../../data/supabase_config.dart';
 import '../../domain/eoscal_calculator.dart';
 import '../../domain/offline_care_plan_builder.dart';
+import '../../domain/trend_calculator.dart';
 
 /// Screen 15 (v2) — Clinical Care Plan
 ///
@@ -58,10 +59,37 @@ class CarePlanScreen extends ConsumerStatefulWidget {
 
 enum _Trend { improving, stable, deteriorating, none }
 
+ClinicalTrend _toClinicalTrend(_Trend t) {
+  switch (t) {
+    case _Trend.improving:
+      return ClinicalTrend.improving;
+    case _Trend.deteriorating:
+      return ClinicalTrend.deteriorating;
+    case _Trend.stable:
+      return ClinicalTrend.stable;
+    case _Trend.none:
+      return ClinicalTrend.none;
+  }
+}
+
+_Trend _fromClinicalTrend(ClinicalTrend t) {
+  switch (t) {
+    case ClinicalTrend.improving:
+      return _Trend.improving;
+    case ClinicalTrend.deteriorating:
+      return _Trend.deteriorating;
+    case ClinicalTrend.stable:
+      return _Trend.stable;
+    case ClinicalTrend.none:
+      return _Trend.none;
+  }
+}
+
 class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
   late Future<ClinicalCarePlan> _future;
   List<Map<String, dynamic>> _previousAssessments = [];
   _Trend _trend = _Trend.none;
+  TrendResult _trendResult = TrendResult.none;
 
   @override
   void initState() {
@@ -73,7 +101,13 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
 
   Future<ClinicalCarePlan> _loadAndGenerate() async {
     _previousAssessments = await _fetchPreviousAssessments();
-    _trend = _computeTrend(_previousAssessments, widget.result.totalScore);
+    final latestDelta = await _fetchLatestDelta();
+    _trendResult = TrendCalculator.compute(
+      previousAssessments: _previousAssessments,
+      currentScore: widget.result.totalScore,
+      latestDeltaRow: latestDelta,
+    );
+    _trend = _fromClinicalTrend(_trendResult.trend);
     try {
       return await explanationApi.generateCarePlan(
         encounterId: widget.patient.id,
@@ -174,13 +208,28 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
     }
   }
 
+  Future<Map<String, dynamic>?> _fetchLatestDelta() async {
+    if (!SupabaseConfig.isConfigured || !AuthService.instance.isSignedIn) {
+      return null;
+    }
+    try {
+      final rows = await AuthService.instance.client
+          .from('assessment_deltas')
+          .select('crp_delta, temp_delta, score_delta, hours_since_last, created_at')
+          .eq('encounter_id', widget.patient.id)
+          .order('created_at', ascending: false)
+          .limit(1);
+      if ((rows as List).isEmpty) return null;
+      return rows.first as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
   _Trend _computeTrend(List<Map<String, dynamic>> previous, int currentScore) {
-    if (previous.isEmpty) return _Trend.none;
-    final lastScore =
-        (previous.last['combined_score'] as num?)?.toInt() ?? currentScore;
-    final delta = currentScore - lastScore;
-    if (delta.abs() <= 1) return _Trend.stable;
-    return delta > 0 ? _Trend.deteriorating : _Trend.improving;
+    return _fromClinicalTrend(
+      TrendCalculator.computeScoreTrend(previous, currentScore),
+    );
   }
 
   void _retry() => setState(() {
@@ -380,6 +429,7 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
         const SizedBox(height: 10),
         _SourceBanner(plan: plan),
         FactCheckBadge(factCheck: plan.factCheck),
+        if (plan.hasSafetyFlags) _SafetyFlagsBanner(plan: plan),
         const SizedBox(height: 12),
 
         // ── A. Patient Development Summary ────────────────────────────────
@@ -452,6 +502,34 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
 
         // ── C. Antibiotic Plan ────────────────────────────────────────────
         _AntibioticPlanCard(plan: plan.antibioticPlan),
+
+        if (plan.nutritionFluidPlan.isNotEmpty)
+          _LetteredSection(
+            letter: null,
+            title: 'Nutrition & Fluid Plan',
+            icon: Icons.local_drink_outlined,
+            accentColor: const Color(0xFF0891B2),
+            children: [
+              Text(
+                plan.nutritionFluidPlan,
+                style: const TextStyle(fontSize: 14, height: 1.7),
+              ),
+            ],
+          ),
+
+        if (plan.parentCommunicationNotes.isNotEmpty)
+          _LetteredSection(
+            letter: null,
+            title: 'Parent Communication Notes',
+            icon: Icons.family_restroom_outlined,
+            accentColor: const Color(0xFF9333EA),
+            children: [
+              Text(
+                plan.parentCommunicationNotes,
+                style: const TextStyle(fontSize: 14, height: 1.7),
+              ),
+            ],
+          ),
 
         // ── D. Monitoring Schedule (hard-coded — never LLM output) ───────
         const _MonitoringScheduleCard(),
@@ -572,6 +650,65 @@ class _TrendChip extends StatelessWidget {
               fontSize: 12,
               fontWeight: FontWeight.w600,
               color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SafetyFlagsBanner extends StatelessWidget {
+  final ClinicalCarePlan plan;
+  const _SafetyFlagsBanner({required this.plan});
+
+  @override
+  Widget build(BuildContext context) {
+    final items = <String>[];
+    if (plan.disambiguationBlock.isNotEmpty) {
+      items.add('Guideline conflict: ${plan.disambiguationBlock}');
+    }
+    for (final flag in plan.contraindicationFlags) {
+      items.add(flag);
+    }
+    if (plan.trendStateChange.isNotEmpty) {
+      items.add('Trend change: ${plan.trendStateChange}');
+    }
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: WhoTheme.riskCritical.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: WhoTheme.riskCritical.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.health_and_safety, size: 18, color: WhoTheme.riskCritical),
+              const SizedBox(width: 8),
+              Text(
+                'Clinical safety flags',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: WhoTheme.riskCritical,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...items.map(
+            (t) => Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                t,
+                style: TextStyle(fontSize: 12, height: 1.4, color: WhoTheme.riskCritical),
+              ),
             ),
           ),
         ],

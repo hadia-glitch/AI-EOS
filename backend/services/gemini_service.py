@@ -554,8 +554,14 @@ _URGENCY_MAP: dict[str, str] = {
 }
 
 
-def _make_care_plan_cache_key(risk_payload: dict[str, Any], active_guideline: str, previous_count: int) -> str:
-    return "careplan:" + _make_cache_key(risk_payload, active_guideline) + f":{previous_count}"
+def _make_care_plan_cache_key(
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    previous_count: int,
+    trend_fingerprint: str = "",
+) -> str:
+    fp = f":{trend_fingerprint}" if trend_fingerprint else ""
+    return "careplan:" + _make_cache_key(risk_payload, active_guideline) + f":{previous_count}{fp}"
 
 
 def _summarize_trend(previous_assessments: list[dict[str, Any]]) -> str:
@@ -625,7 +631,7 @@ RISK RESULT (already calculated -- do NOT recalculate):
 RETRIEVED GUIDELINE EVIDENCE (valid chunk IDs: {json.dumps(valid_ids)}):
 {chunk_text}
 
-INSTRUCTIONS -- produce all 7 sections:
+INSTRUCTIONS -- produce all 13 sections:
 1. clinical_summary: 3-5 sentences giving a complete narrative of this patient's development --
    what has changed, what is improving or worsening, and what today's assessment means. If prior
    assessments exist, explicitly reference the trajectory over the last {len(previous_assessments)}
@@ -645,6 +651,15 @@ INSTRUCTIONS -- produce all 7 sections:
    NICE NG195 monitoring table -- this text supplements it, do not repeat the table verbatim).
 8. escalation_criteria: supplementary free-text escalation guidance (the UI already renders a
    fixed escalation trigger list -- this text supplements it).
+9. nutrition_fluid_plan: explicit feeding guidance (hold enteral feeds vs trophic feeding vs
+   continue as tolerated) and fluid management appropriate to the risk category. Empty ONLY if
+   genuinely not applicable to this risk category.
+10. parent_communication_notes: 2-3 sentences in plain language a clinician can relay to the family.
+11. disambiguation_block: when retrieved chunks from >=2 guideline sources meaningfully conflict
+    on a checkable claim, explain the conflict. Empty if not applicable.
+12. contraindication_flags: your best-effort list of contraindication concerns (deterministic
+    checks override these — treat as supplement only).
+13. trend_state_change: when trend data indicates a meaningful category-level shift. Empty if none.
 
 Every factual claim must trace to a retrieved chunk or to the risk result provided. Do not invent
 clinical facts, drug doses, or thresholds not present in the chunks or standard {active_guideline}
@@ -667,6 +682,11 @@ Schema:
   }},
   "monitoring_plan": "<string>",
   "escalation_criteria": "<string>",
+  "nutrition_fluid_plan": "<string>",
+  "parent_communication_notes": "<string>",
+  "disambiguation_block": "<string>",
+  "contraindication_flags": ["<string>"],
+  "trend_state_change": "<string>",
   "citation_list": [
     {{"source": "<source_name>", "section": "<section>", "chunk_id": "<id from valid list>", "similarity_score": <float>}}
   ],
@@ -674,11 +694,70 @@ Schema:
 }}"""
 
 
+def _detect_cross_guideline_conflict(
+    chunks: list[EvidenceChunkResult],
+    active_guideline: str,
+) -> bool:
+    """True when >=2 distinct guideline sources appear in retrieved chunks."""
+    guideline_upper = active_guideline.upper()
+    off_guideline_sources: set[str] = set()
+    for c in chunks:
+        source_key = (c.source_name or c.source or "").strip().upper()
+        if not source_key:
+            continue
+        if guideline_upper not in source_key:
+            off_guideline_sources.add(source_key)
+    return len(off_guideline_sources) >= 2
+
+
+def _apply_deterministic_care_plan_checks(
+    result: ClinicalCarePlanResponse,
+    risk_payload: dict[str, Any],
+    chunks: list[EvidenceChunkResult],
+    active_guideline: str,
+    deltas: dict | None = None,
+) -> tuple[ClinicalCarePlanResponse, bool]:
+    """
+    Run deterministic overrides. Returns (updated_result, missed_required_disambiguation).
+    """
+    from domain.contraindication_rules import check_contraindications, flags_to_strings
+
+    patient = risk_payload.get("patient", {})
+    if hasattr(patient, "model_dump"):
+        patient = patient.model_dump()
+
+    proposed_drugs = result.antibiotic_plan.regimen or []
+    det_flags = check_contraindications(patient, proposed_drugs)
+    det_strings = flags_to_strings(det_flags)
+
+    existing = set(result.contraindication_flags)
+    for flag in det_strings:
+        if flag not in existing:
+            result.contraindication_flags.append(flag)
+
+    cross_conflict = _detect_cross_guideline_conflict(chunks, active_guideline)
+    missed_disambiguation = cross_conflict and not result.disambiguation_block.strip()
+
+    if deltas and not result.trend_state_change.strip():
+        score_delta = deltas.get("score_delta")
+        if score_delta is not None and abs(float(score_delta)) >= 2:
+            direction = "deteriorating" if float(score_delta) > 0 else "improving"
+            result.trend_state_change = (
+                f"Deterministic trend note: EOSCAL score {direction} "
+                f"(delta {score_delta}) since last assessment."
+            )
+
+    return result, missed_disambiguation
+
+
 def _parse_care_plan_response(
     raw: str,
     chunks: list[EvidenceChunkResult],
     model_version: str,
     chunk_responses: list[EvidenceChunkResponse],
+    risk_payload: dict[str, Any] | None = None,
+    active_guideline: str = "NICE",
+    deltas: dict | None = None,
 ) -> ClinicalCarePlanResponse:
     text = raw.strip()
     if text.startswith("```"):
@@ -717,7 +796,7 @@ def _parse_care_plan_response(
         stop_criteria=str(abx.get("stop_criteria", "")),
     )
 
-    return ClinicalCarePlanResponse(
+    result = ClinicalCarePlanResponse(
         clinical_summary=data.get("clinical_summary", ""),
         risk_analysis=data.get("risk_analysis", ""),
         trend_narrative=data.get("trend_narrative", ""),
@@ -731,7 +810,13 @@ def _parse_care_plan_response(
         rag_chunks=chunk_responses,
         model_version=model_version,
         fallback_used=False,
+        nutrition_fluid_plan=str(data.get("nutrition_fluid_plan", "")),
+        parent_communication_notes=str(data.get("parent_communication_notes", "")),
+        disambiguation_block=str(data.get("disambiguation_block", "")),
+        contraindication_flags=[str(f) for f in data.get("contraindication_flags", [])],
+        trend_state_change=str(data.get("trend_state_change", "")),
     )
+    return result
 
 
 def _fallback_care_plan(
@@ -851,6 +936,8 @@ def _maybe_fact_check_care_plan(
     risk_payload: dict[str, Any],
     active_guideline: str,
     chunks: list[EvidenceChunkResult],
+    deltas: dict | None = None,
+    missed_required_disambiguation: bool = False,
 ) -> FactCheckResult:
     category = risk_payload.get("category", risk_payload.get("risk_category", ""))
     if not should_fact_check(category):
@@ -859,8 +946,16 @@ def _maybe_fact_check_care_plan(
         result.clinical_summary, result.risk_analysis, result.driver_breakdown,
         result.recommended_actions, result.antibiotic_plan.model_dump(),
         result.monitoring_plan, result.escalation_criteria,
+        nutrition_fluid_plan=result.nutrition_fluid_plan,
+        disambiguation_block=result.disambiguation_block,
+        contraindication_flags=result.contraindication_flags,
+        trend_state_change=result.trend_state_change,
     )
-    return run_fact_check(draft, risk_payload, active_guideline, chunks)
+    return run_fact_check(
+        draft, risk_payload, active_guideline, chunks,
+        deltas=deltas,
+        missed_required_disambiguation=missed_required_disambiguation,
+    )
 
 
 def generate_care_plan(
@@ -869,11 +964,15 @@ def generate_care_plan(
     chunks: list[EvidenceChunkResult],
     previous_assessments: list[dict[str, Any]] | None = None,
     query: str = "",
+    deltas: dict | None = None,
+    trend_fingerprint: str = "",
 ) -> ClinicalCarePlanResponse:
     settings = get_settings()
     previous_assessments = previous_assessments or []
     chunk_responses = [EvidenceChunkResponse(**c.to_dict()) for c in chunks]
-    cache_key = _make_care_plan_cache_key(risk_payload, active_guideline, len(previous_assessments))
+    cache_key = _make_care_plan_cache_key(
+        risk_payload, active_guideline, len(previous_assessments), trend_fingerprint,
+    )
 
     # -- 1. Cache --
     # Same rule as generate_explanation(): a rule-based-fallback cache hit
@@ -901,8 +1000,20 @@ def generate_care_plan(
     # -- 2. Try the LLM provider chain (Local -> Gemini -> Groq) --
     try:
         raw, model_used = call_llm(prompt, settings)
-        result = _parse_care_plan_response(raw, chunks, model_used, chunk_responses)
-        result.fact_check = _maybe_fact_check_care_plan(result, risk_payload, active_guideline, chunks)
+        result = _parse_care_plan_response(
+            raw, chunks, model_used, chunk_responses,
+            risk_payload=risk_payload,
+            active_guideline=active_guideline,
+            deltas=deltas,
+        )
+        result, missed_disambiguation = _apply_deterministic_care_plan_checks(
+            result, risk_payload, chunks, active_guideline, deltas,
+        )
+        result.fact_check = _maybe_fact_check_care_plan(
+            result, risk_payload, active_guideline, chunks,
+            deltas=deltas,
+            missed_required_disambiguation=missed_disambiguation,
+        )
         _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
                                 chunks, model_used, is_simulated=False)
         print(f"[LLM] Care plan generated via {model_used}")
@@ -967,6 +1078,11 @@ def _check_care_plan_cache(cache_key: str) -> ClinicalCarePlanResponse | None:
             model_version=f"cached:{model_ver}",
             fallback_used=is_simulated,
             fact_check=FactCheckResult(**fc) if fc else FactCheckResult(),
+            nutrition_fluid_plan=resp_json.get("nutrition_fluid_plan", ""),
+            parent_communication_notes=resp_json.get("parent_communication_notes", ""),
+            disambiguation_block=resp_json.get("disambiguation_block", ""),
+            contraindication_flags=resp_json.get("contraindication_flags", []),
+            trend_state_change=resp_json.get("trend_state_change", ""),
         )
     except Exception as e:
         print(f"[LLM] Care plan cache check failed (non-fatal): {e}")
@@ -1005,6 +1121,11 @@ def _write_care_plan_cache(
             "citation_list":        citations_json,
             "confidence_disclaimer": result.confidence_disclaimer,
             "fact_check":           result.fact_check.model_dump(),
+            "nutrition_fluid_plan": result.nutrition_fluid_plan,
+            "parent_communication_notes": result.parent_communication_notes,
+            "disambiguation_block": result.disambiguation_block,
+            "contraindication_flags": result.contraindication_flags,
+            "trend_state_change": result.trend_state_change,
         }
         patient = risk_payload.get("patient", {})
         if hasattr(patient, "model_dump"):

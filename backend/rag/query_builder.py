@@ -6,6 +6,7 @@ from typing import Any
 def build_clinical_query(
     risk_payload: dict[str, Any],
     active_guideline: str = "NICE",
+    deltas: dict | None = None,
 ) -> str:
     """Build a clinical search query from de-identified risk result data."""
     parts: list[str] = [
@@ -65,5 +66,16 @@ def build_clinical_query(
     total = risk_payload.get("total_score", risk_payload.get("combined_score", 0))
     if total and int(total) >= 7:
         parts.extend(["blood culture", "empirical antibiotics", "senior review"])
+
+    if deltas:
+        crp_delta = deltas.get("crp_delta")
+        if crp_delta is not None and float(crp_delta) > 2.0:
+            parts.extend(["rising CRP", "worsening inflammatory markers"])
+        score_delta = deltas.get("score_delta")
+        if score_delta is not None:
+            if float(score_delta) > 0:
+                parts.extend(["deteriorating", "escalating risk"])
+            elif float(score_delta) < 0:
+                parts.extend(["improving", "resolving"])
 
     return " ".join(dict.fromkeys(p.strip() for p in parts if p.strip()))

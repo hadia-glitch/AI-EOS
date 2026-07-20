@@ -359,7 +359,45 @@ def encounter_evidence(encounter_id: str, body: EncounterEvidenceRequest):
     return [EvidenceChunkResponse(**c.to_dict()) for c in chunks]
 
 
-def _safe_retrieve_evidence(risk_payload: dict, active_guideline: str, query: str):
+def _fetch_latest_assessment_delta(encounter_id: str) -> dict | None:
+    """Query the assessment_deltas view for the most recent row."""
+    try:
+        from db import get_supabase
+        supabase = get_supabase()
+        rows = (
+            supabase.table("assessment_deltas")
+            .select("*")
+            .eq("encounter_id", encounter_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if rows.data:
+            return rows.data[0]
+    except Exception as e:
+        print(f"[API] assessment_deltas query failed (non-fatal): {e}")
+    return None
+
+
+def _trend_fingerprint(deltas: dict | None) -> str:
+    if not deltas:
+        return ""
+    parts = []
+    crp = deltas.get("crp_delta")
+    if crp is not None:
+        parts.append("crp_up" if float(crp) > 0 else "crp_down" if float(crp) < 0 else "crp_flat")
+    score = deltas.get("score_delta")
+    if score is not None:
+        parts.append("score_up" if float(score) > 0 else "score_down" if float(score) < 0 else "score_flat")
+    return "_".join(parts)
+
+
+def _safe_retrieve_evidence(
+    risk_payload: dict,
+    active_guideline: str,
+    query: str,
+    deltas: dict | None = None,
+):
     """
     retrieve_evidence() already degrades gracefully internally (seed
     fallback if the model/store can't load, unreranked order if the
@@ -371,7 +409,11 @@ def _safe_retrieve_evidence(risk_payload: dict, active_guideline: str, query: st
     result, not a failure.
     """
     try:
-        return retrieve_evidence(risk_payload=risk_payload, active_guideline=active_guideline)
+        return retrieve_evidence(
+            risk_payload=risk_payload,
+            active_guideline=active_guideline,
+            deltas=deltas,
+        )
     except Exception as e:
         print(f"[API] retrieve_evidence failed unexpectedly for query='{query[:80]}': {e}")
         return []
@@ -420,9 +462,11 @@ def encounter_explanation(encounter_id: str, body: EncounterEvidenceRequest):
 @app.post("/api/v1/encounters/{encounter_id}/care-plan", response_model=ClinicalCarePlanResponse)
 def encounter_care_plan(encounter_id: str, body: CarePlanRequest):
     payload = body.risk_result.model_dump()
+    latest_delta = _fetch_latest_assessment_delta(encounter_id)
     chunks = _safe_retrieve_evidence(
         payload, body.active_guideline,
         query=f"EOS care plan {body.active_guideline} {payload.get('category', '')}",
+        deltas=latest_delta,
     )
     try:
         care_plan = generate_care_plan(
@@ -431,6 +475,8 @@ def encounter_care_plan(encounter_id: str, body: CarePlanRequest):
             chunks,
             previous_assessments=body.previous_assessments,
             query=f"EOS care plan {body.active_guideline} {payload.get('category', '')}",
+            deltas=latest_delta,
+            trend_fingerprint=_trend_fingerprint(latest_delta),
         )
     except Exception as e:
         print(f"[API] generate_care_plan failed unexpectedly: {e}")

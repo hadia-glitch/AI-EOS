@@ -220,6 +220,8 @@ def retrieve_evidence(
     active_guideline: str = "NICE",
     source_filters: list[str] | None = None,
     top_k: int | None = None,
+    refined_query=None,
+    deltas: dict | None = None,
 ) -> list[EvidenceChunkResult]:
     settings = get_settings()
     store = get_chunk_store()
@@ -235,9 +237,40 @@ def retrieve_evidence(
         return _fallback_chunks(query or "", active_guideline, top_k or settings.rerank_top_k)
 
     if query is None and risk_payload:
-        query = build_clinical_query(risk_payload, active_guideline)
+        query = build_clinical_query(risk_payload, active_guideline, deltas=deltas)
     if not query:
         query = "EOS neonatal sepsis management guidelines"
+
+    # Optional query refinement ablation (behind config flag).
+    if settings.enable_query_refinement and risk_payload and refined_query is None:
+        from rag.query_refiner import refine_query
+        refined_query = refine_query(query, risk_payload)
+
+    if refined_query is not None and refined_query.action == "decompose":
+        from rag.query_refiner import RefinedQuery
+        sub_results: list[list[EvidenceChunkResult]] = []
+        for sub_q in refined_query.sub_queries:
+            sub_results.append(
+                retrieve_evidence(
+                    query=sub_q,
+                    risk_payload=None,
+                    active_guideline=active_guideline,
+                    source_filters=source_filters,
+                    top_k=top_k,
+                    refined_query=RefinedQuery(action="pass_through", sub_queries=[sub_q]),
+                    deltas=deltas,
+                )
+            )
+        merged_ids = reciprocal_rank_fusion(
+            sub_results,
+            k=settings.rrf_k,
+            id_fn=lambda c: c.chunk_id,
+        )
+        final_k = top_k or settings.rerank_top_k
+        return [item for item, _ in merged_ids[:final_k]]
+
+    if refined_query is not None and refined_query.sub_queries:
+        query = refined_query.sub_queries[0]
 
     print(f"[Retrieval] Query: '{query[:100]}' guideline={active_guideline} store={len(store.chunks)} chunks")
 

@@ -583,48 +583,90 @@ class AlertsTab extends ConsumerStatefulWidget {
 }
 
 class _AlertsTabState extends ConsumerState<AlertsTab> {
+  List<Map<String, dynamic>> _activeAlerts = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAlertsFromDb();
+  }
+
+  Future<void> _loadAlertsFromDb() async {
+    if (!SupabaseConfig.isConfigured || !AuthService.instance.isSignedIn) {
+      if (mounted) setState(() { _activeAlerts = []; _loading = false; });
+      return;
+    }
+
+    final patients = ref.read(patientsProvider);
+    if (patients.isEmpty) {
+      if (mounted) setState(() { _activeAlerts = []; _loading = false; });
+      return;
+    }
+
+    final encounterIds = patients.map((p) => p.id).toList();
+    final patientById = {for (final p in patients) p.id: p};
+
+    try {
+      final client = AuthService.instance.client;
+      final rows = await client
+          .from('alerts')
+          .select('encounter_id, alert_type, priority, action_taken, created_at')
+          .inFilter('encounter_id', encounterIds)
+          .order('created_at', ascending: false);
+
+      final alerts = <Map<String, dynamic>>[];
+      for (final row in rows as List<dynamic>) {
+        final m = row as Map<String, dynamic>;
+        final encounterId = m['encounter_id'] as String?;
+        if (encounterId == null) continue;
+        final patient = patientById[encounterId];
+        if (patient == null) continue;
+
+        final res = EoscalCalculator.calculate(patient);
+        final alertType = m['alert_type'] as String? ?? 'risk';
+        final priority = m['priority'] as String? ?? 'MEDIUM';
+        alerts.add({
+          'patient': patient,
+          'result': res,
+          'type': alertType,
+          'severity': _severityFromAlert(priority, alertType, res.riskCategory),
+          'message': m['action_taken'] as String? ?? 'Clinical alert active.',
+        });
+      }
+
+      if (mounted) setState(() { _activeAlerts = alerts; _loading = false; });
+    } catch (e) {
+      debugPrint('AlertsTab DB query failed: $e');
+      if (mounted) setState(() { _activeAlerts = []; _loading = false; });
+    }
+  }
+
+  RiskCategory _severityFromAlert(
+    String priority,
+    String alertType,
+    RiskCategory defaultRisk,
+  ) {
+    switch (priority.toUpperCase()) {
+      case 'CRITICAL':
+        return RiskCategory.critical;
+      case 'HIGH':
+        return RiskCategory.high;
+      case 'MEDIUM':
+        return RiskCategory.intermediate;
+      default:
+        if (alertType == 'culture') return RiskCategory.critical;
+        return defaultRisk;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final patients = ref.watch(patientsProvider);
+    ref.listen<List<PatientParameters>>(patientsProvider, (_, __) {
+      _loadAlertsFromDb();
+    });
 
-    final List<Map<String, dynamic>> activeAlerts = [];
-
-    for (var p in patients) {
-      final res = EoscalCalculator.calculate(p);
-      // High or critical risks trigger clinical warning items
-      if (res.riskCategory == RiskCategory.critical ||
-          res.riskCategory == RiskCategory.high) {
-        activeAlerts.add({
-          'patient': p,
-          'result': res,
-          'type': 'risk',
-          'severity': res.riskCategory,
-          'message':
-              'Patient has a high EOSCAL score of ${res.totalScore}. Initiate clinical protocols.',
-        });
-      }
-      // Premature warning
-      if (p.gestationalAgeWeeks < 35.0) {
-        activeAlerts.add({
-          'patient': p,
-          'result': res,
-          'type': 'preterm',
-          'severity': RiskCategory.intermediate,
-          'message':
-              'Premature gestation (${p.gestationalAgeWeeks} weeks). Interpret calculations with caution.',
-        });
-      }
-      // Blood culture alerts
-      if (p.bloodCulturePositive == true) {
-        activeAlerts.add({
-          'patient': p,
-          'result': res,
-          'type': 'culture',
-          'severity': RiskCategory.critical,
-          'message': 'CONFIRMED BACTEREMIA. Blood culture returned positive.',
-        });
-      }
-    }
+    final activeAlerts = _activeAlerts;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -642,7 +684,9 @@ class _AlertsTabState extends ConsumerState<AlertsTab> {
           ),
           const SizedBox(height: 16),
           Expanded(
-            child: activeAlerts.isEmpty
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : activeAlerts.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,

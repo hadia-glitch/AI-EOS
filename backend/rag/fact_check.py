@@ -1,30 +1,4 @@
-"""
-Fact-checking judge agent — Phase 3 of the RAG hardening plan.
-
-Design decision: a single adversarial judge pass, not separate optimist +
-pessimist + judge agents. Three sequential LLM calls (draft optimist case,
-draft pessimist case, judge synthesises) triple latency and cost for every
-request and roughly triple the rate-limit pressure on the free Gemini/Groq
-tiers this project runs on. A single judge prompted to actively look for
-unsupported claims — rather than to summarise — gets most of the same
-error-catching benefit for a third of the cost. This is gated to
-HIGH/CRITICAL risk categories only (config.fact_check_categories), which is
-exactly the population where a missed hallucination matters most and where
-the added ~1-2s latency is acceptable against the clinical stakes; LOW/
-INTERMEDIATE stay fast and cheap.
-
-The judge does NOT re-decide the clinical recommendation and does NOT call
-out to the open web — it strictly checks the draft's claims against (a) the
-retrieved guideline chunks and (b) the deterministic risk_result data it was
-given, mirroring how a human colleague "second read" would sanity-check a
-note against the chart and the reference text, not against their own
-independent judgement.
-
-Uses the same unified provider chain as the rest of the app (Local LLM ->
-Gemini -> Groq, see services/llm_provider.py) — a HIPAA-strict deployment
-running local_llm_enabled with disable_cloud_llm_fallback=True keeps the
-fact-check judge's own traffic local too, same as everything else.
-"""
+"""Fact-checking judge agent — Phase 3 of the RAG hardening plan."""
 
 from __future__ import annotations
 
@@ -49,6 +23,8 @@ def _build_judge_prompt(
     risk_payload: dict[str, Any],
     active_guideline: str,
     chunks: list[EvidenceChunkResult],
+    deltas: dict | None = None,
+    missed_required_disambiguation: bool = False,
 ) -> str:
     chunk_text = "\n\n".join(
         f"[{c.chunk_id}] {c.source_name} — {c.section}:\n{c.chunk_text}"
@@ -58,6 +34,16 @@ def _build_judge_prompt(
     patient = risk_payload.get("patient", {})
     if hasattr(patient, "model_dump"):
         patient = patient.model_dump()
+
+    delta_block = json.dumps(deltas, default=str) if deltas else "(no delta data available)"
+
+    missed_block = ""
+    if missed_required_disambiguation:
+        missed_block = (
+            "\n\nDETERMINISTIC ALERT: Cross-guideline conflict was detected in retrieved "
+            "evidence but the draft's disambiguation_block is EMPTY. This is a required "
+            "disclosure failure — set verified=false and flag it."
+        )
 
     return f"""You are a fact-checking judge reviewing clinical AI output before it reaches a doctor. \
 You did NOT write the draft below — a separate model did. Your only job is to verify every clinical \
@@ -74,11 +60,15 @@ SOURCE 1 — DETERMINISTIC RISK RESULT (already calculated by a rule engine, tre
 - Risk drivers: {json.dumps(risk_payload.get('drivers', []))}
 - De-identified patient snapshot: {json.dumps(patient, default=str)}
 
+ASSESSMENT DELTAS (trend data from prior assessment):
+{delta_block}
+
 SOURCE 2 — RETRIEVED GUIDELINE EVIDENCE (the only permitted source for clinical facts/drugs/doses/thresholds):
 {chunk_text}
 
 DRAFT UNDER REVIEW:
 {draft_summary}
+{missed_block}
 
 INSTRUCTIONS:
 1. Check every factual clinical claim in the draft (drug names, doses, thresholds, timeframes,
@@ -92,6 +82,10 @@ INSTRUCTIONS:
    action (e.g. a wrong drug, dose, or threshold) — minor unsupported phrasing still allows
    verified=true but should be listed in flagged_claims and lower the confidence score.
 5. confidence is your overall 0.0-1.0 assessment of how well-grounded the draft is in the sources.
+6. Set verified=false if a deterministically-detected condition (contraindication flag from the
+   rule engine, or cross-guideline conflict per DETERMINISTIC ALERT above) was NOT surfaced in the
+   draft's disambiguation_block or contraindication_flags. Prepend "[MISSED_REQUIRED_DISCLOSURE]"
+   to such flagged_claims entries.
 
 Respond with ONLY valid JSON — no markdown fences, no preamble.
 Schema:
@@ -110,7 +104,7 @@ def _parse_judge_response(raw: str, model_version: str) -> FactCheckResult:
         if text.startswith("json"):
             text = text[4:]
         text = text.rsplit("```", 1)[0].strip()
-    data = json.loads(text)  # raises on failure -- caller handles
+    data = json.loads(text)
 
     confidence = float(data.get("confidence", 0.5))
     confidence = max(0.0, min(1.0, confidence))
@@ -130,14 +124,14 @@ def run_fact_check(
     risk_payload: dict[str, Any],
     active_guideline: str,
     chunks: list[EvidenceChunkResult],
+    deltas: dict | None = None,
+    missed_required_disambiguation: bool = False,
 ) -> FactCheckResult:
-    """
-    Runs the judge pass. Caller is responsible for gating this with
-    should_fact_check() first — this function always attempts a check when
-    called. Never raises: any failure downgrades to performed=False so the
-    draft is still served rather than blocked.
-    """
-    prompt = _build_judge_prompt(draft_summary, risk_payload, active_guideline, chunks)
+    prompt = _build_judge_prompt(
+        draft_summary, risk_payload, active_guideline, chunks,
+        deltas=deltas,
+        missed_required_disambiguation=missed_required_disambiguation,
+    )
 
     try:
         raw, model_used = call_llm(
@@ -150,12 +144,16 @@ def run_fact_check(
         return result
     except LLMUnavailableError as e:
         print(f"[FactCheck] No judge provider available ({e}) — skipping (draft served unverified)")
-        return FactCheckResult(performed=False, verified=True, confidence=0.0,
-                                notes="Fact-check unavailable (no LLM provider).")
+        return FactCheckResult(
+            performed=False, verified=True, confidence=0.0,
+            notes="Fact-check unavailable (no LLM provider).",
+        )
 
 
-def summarize_explanation_for_judge(clinical_summary: str, per_driver: list[dict],
-                                     actions: list[str], evidence_summary: str) -> str:
+def summarize_explanation_for_judge(
+    clinical_summary: str, per_driver: list[dict],
+    actions: list[str], evidence_summary: str,
+) -> str:
     driver_lines = "\n".join(
         f"- {d.get('factor', '')}: {d.get('explanation', '')}" for d in per_driver
     )
@@ -168,12 +166,22 @@ def summarize_explanation_for_judge(clinical_summary: str, per_driver: list[dict
     )
 
 
-def summarize_care_plan_for_judge(clinical_summary: str, risk_analysis: str,
-                                   driver_breakdown: str, actions: list[str],
-                                   antibiotic_plan: dict, monitoring_plan: str,
-                                   escalation_criteria: str) -> str:
+def summarize_care_plan_for_judge(
+    clinical_summary: str,
+    risk_analysis: str,
+    driver_breakdown: str,
+    actions: list[str],
+    antibiotic_plan: dict,
+    monitoring_plan: str,
+    escalation_criteria: str,
+    nutrition_fluid_plan: str = "",
+    disambiguation_block: str = "",
+    contraindication_flags: list[str] | None = None,
+    trend_state_change: str = "",
+) -> str:
     actions_lines = "\n".join(f"- {a}" for a in actions)
     abx_lines = "\n".join(f"- {r}" for r in antibiotic_plan.get("regimen", []))
+    ci_lines = "\n".join(f"- {f}" for f in (contraindication_flags or []))
     return (
         f"CLINICAL SUMMARY:\n{clinical_summary}\n\n"
         f"RISK ANALYSIS:\n{risk_analysis}\n\n"
@@ -184,5 +192,9 @@ def summarize_care_plan_for_judge(clinical_summary: str, risk_analysis: str,
         f"duration={antibiotic_plan.get('duration')} "
         f"stop_criteria={antibiotic_plan.get('stop_criteria')}\n\n"
         f"MONITORING PLAN:\n{monitoring_plan}\n\n"
-        f"ESCALATION CRITERIA:\n{escalation_criteria}"
+        f"ESCALATION CRITERIA:\n{escalation_criteria}\n\n"
+        f"NUTRITION/FLUID PLAN:\n{nutrition_fluid_plan}\n\n"
+        f"DISAMBIGUATION BLOCK:\n{disambiguation_block}\n\n"
+        f"CONTRAINDICATION FLAGS:\n{ci_lines}\n\n"
+        f"TREND STATE CHANGE:\n{trend_state_change}"
     )

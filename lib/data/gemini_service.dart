@@ -125,12 +125,14 @@ class ClinicalCarePlan {
   final String monitoringPlan;
   final String escalationCriteria;
   final List<String> guidelineCitations;
-  /// True = rule-based deterministic output, NOT AI-generated.
   final bool isSimulated;
-  /// Human-readable source label shown in the status banner.
   final String sourceLabel;
-  /// Result of the backend fact-checking judge (HIGH/CRITICAL only).
   final FactCheckInfo factCheck;
+  final String nutritionFluidPlan;
+  final String parentCommunicationNotes;
+  final String disambiguationBlock;
+  final List<String> contraindicationFlags;
+  final String trendStateChange;
 
   const ClinicalCarePlan({
     required this.clinicalSummary,
@@ -145,7 +147,17 @@ class ClinicalCarePlan {
     this.isSimulated = false,
     this.sourceLabel = '',
     this.factCheck = const FactCheckInfo(),
+    this.nutritionFluidPlan = '',
+    this.parentCommunicationNotes = '',
+    this.disambiguationBlock = '',
+    this.contraindicationFlags = const [],
+    this.trendStateChange = '',
   });
+
+  bool get hasSafetyFlags =>
+      disambiguationBlock.isNotEmpty ||
+      contraindicationFlags.isNotEmpty ||
+      trendStateChange.isNotEmpty;
 }
 
 class EvidenceCardResult {
