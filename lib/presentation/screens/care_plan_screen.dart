@@ -226,7 +226,7 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
     }
   }
 
-  }
+  
 
   void _retry() => setState(() {
     _future = _loadAndGenerate();

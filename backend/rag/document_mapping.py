@@ -20,7 +20,7 @@ def infer_document_meta(filename: str) -> DocumentMeta:
         return DocumentMeta(
             source="NICE",
             source_name="NICE NG195",
-            version="2023",
+            version="2026",
             region_tag="UK",
         )
     if "aap" in lower or "puopolo" in lower and "2018" in lower:
@@ -58,18 +58,12 @@ def infer_document_meta(filename: str) -> DocumentMeta:
             version="2019",
             region_tag="GLOBAL",
         )
-    if "qatar" in lower or "bmj" in lower or "vellamgot" in lower:
-        return DocumentMeta(
-            source="EOSCAL",
-            source_name="Paraparambil Vellamgot et al. 2023 Qatar Validation",
-            version="2023",
-            region_tag="GLOBAL",
-        )
+  
 
     stem = Path(filename).stem
     return DocumentMeta(
         source="LOCAL",
         source_name=stem,
         version="1.0",
-        region_tag="LOCAL",
+        region_tag="GENERAL",
     )
