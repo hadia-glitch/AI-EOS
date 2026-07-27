@@ -1,0 +1,207 @@
+-- Phase: real KDIGO-neonatal-modified AKI staging, replacing the point-in-time
+-- urine/creatinine check in contraindication_rules.py with windowed criteria.
+--
+-- Citation: neonatal-modified KDIGO criteria as used by the AWAKEN study
+-- consortium (Jetton et al. 2017, Lancet Child Adolesc Health; Selewski et al.
+-- 2019 summary in Pediatr Nephrol) — the standard reference for "modified
+-- KDIGO" staging in neonates:
+--   Creatinine: rise >=0.3 mg/dL within 48h, OR >=1.5x a baseline within 7 days
+--     (baseline = lowest previous serum creatinine for this encounter)
+--   Urine output: <0.5 mL/kg/hr sustained >=6h (stage 1), >=12h (stage 2),
+--     or <0.3 mL/kg/hr sustained >=24h / anuria >=12h (stage 3)
+--
+-- IMPORTANT LIMITATION (document this in the paper, don't discover it later):
+-- This implementation can only detect a RISE from a previous measurement —
+-- it has no gestational-age-based nomogram of "expected normal" creatinine,
+-- so a patient's FIRST-EVER creatinine reading can never trigger a rise-based
+-- flag (there is nothing to compare it to). This matches the existing
+-- "missing data never guesses" philosophy (see contraindication_rules.py) —
+-- it is a deliberate scope boundary, not a bug, but reviewers should be told
+-- this explicitly rather than finding it themselves.
+--
+-- The urine-output "sustained window" criteria are approximated from
+-- event-driven (manually-charted) assessments, not continuous monitoring —
+-- see the sustained_low_urine_output logic below for exactly what's checked.
+
+CREATE OR REPLACE VIEW assessment_deltas AS
+WITH scored AS (
+  SELECT
+    ca.id AS assessment_id,
+    ca.encounter_id,
+    ca.created_at,
+    ca.lab_data,
+    ca.neonatal_data,
+    rr.combined_score
+  FROM clinical_assessments ca
+  LEFT JOIN risk_results rr ON rr.assessment_id = ca.id
+),
+with_lag AS (
+  SELECT
+    assessment_id,
+    encounter_id,
+    created_at,
+    combined_score,
+    (lab_data->>'crp_level')::numeric AS crp_level,
+    (neonatal_data->>'neonatal_temperature')::numeric AS neonatal_temperature,
+    (lab_data->>'creatinine_mg_dl')::numeric AS creatinine_mg_dl,
+    (lab_data->>'urine_output_ml_kg_hr')::numeric AS urine_output_ml_kg_hr,
+    LAG(created_at) OVER (
+      PARTITION BY encounter_id ORDER BY created_at
+    ) AS prev_created_at,
+    LAG((lab_data->>'crp_level')::numeric) OVER (
+      PARTITION BY encounter_id ORDER BY created_at
+    ) AS prev_crp,
+    LAG((neonatal_data->>'neonatal_temperature')::numeric) OVER (
+      PARTITION BY encounter_id ORDER BY created_at
+    ) AS prev_temp,
+    LAG(combined_score) OVER (
+      PARTITION BY encounter_id ORDER BY created_at
+    ) AS previous_combined_score
+  FROM scored
+),
+base AS (
+  SELECT
+    assessment_id, encounter_id, created_at, combined_score,
+    crp_level, neonatal_temperature, creatinine_mg_dl, urine_output_ml_kg_hr,
+    CASE WHEN crp_level IS NOT NULL AND prev_crp IS NOT NULL
+         THEN crp_level - prev_crp ELSE NULL END AS crp_delta,
+    CASE WHEN neonatal_temperature IS NOT NULL AND prev_temp IS NOT NULL
+         THEN neonatal_temperature - prev_temp ELSE NULL END AS temp_delta,
+    CASE WHEN prev_created_at IS NOT NULL
+         THEN EXTRACT(EPOCH FROM (created_at - prev_created_at)) / 3600
+         ELSE NULL END AS hours_since_last,
+    previous_combined_score,
+    CASE WHEN combined_score IS NOT NULL AND previous_combined_score IS NOT NULL
+         THEN combined_score - previous_combined_score ELSE NULL END AS score_delta
+  FROM with_lag
+)
+SELECT
+  b.*,
+
+  -- Baseline = lowest previous creatinine for this encounter (AWAKEN/modified
+  -- KDIGO neonatal definition of baseline). NULL until a 2nd measurement exists.
+  bl.baseline_creatinine,
+
+  -- Rise vs. the most recent prior reading taken >=48h before this one.
+  -- NULL if no prior reading exists that far back — that's correct, not missing data.
+  r48.creatinine_48h_ref,
+  CASE
+    WHEN b.creatinine_mg_dl IS NOT NULL AND r48.creatinine_48h_ref IS NOT NULL
+    THEN b.creatinine_mg_dl - r48.creatinine_48h_ref
+    ELSE NULL
+  END AS creatinine_rise_48h,
+
+  CASE
+    WHEN b.creatinine_mg_dl IS NOT NULL AND bl.baseline_creatinine IS NOT NULL
+         AND bl.baseline_creatinine > 0
+    THEN b.creatinine_mg_dl / bl.baseline_creatinine
+    ELSE NULL
+  END AS creatinine_ratio_to_baseline,
+
+  -- AKI stage from creatinine criteria alone (KDIGO-neonatal-modified).
+  CASE
+    WHEN b.creatinine_mg_dl IS NOT NULL AND bl.baseline_creatinine IS NOT NULL
+         AND b.creatinine_mg_dl >= 3.0 * bl.baseline_creatinine
+    THEN 3
+    WHEN b.creatinine_mg_dl IS NOT NULL AND bl.baseline_creatinine IS NOT NULL
+         AND b.creatinine_mg_dl >= 2.0 * bl.baseline_creatinine
+    THEN 2
+    WHEN (b.creatinine_mg_dl IS NOT NULL AND r48.creatinine_48h_ref IS NOT NULL
+          AND (b.creatinine_mg_dl - r48.creatinine_48h_ref) >= 0.3)
+      OR (b.creatinine_mg_dl IS NOT NULL AND bl.baseline_creatinine IS NOT NULL
+          AND b.creatinine_mg_dl >= 1.5 * bl.baseline_creatinine)
+    THEN 1
+    ELSE 0
+  END AS creatinine_aki_stage,
+
+  -- Urine-output criteria: approximated from event-driven charting. A window
+  -- only counts as "sustained" if every assessment inside it is below
+  -- threshold AND the window actually spans the required duration (i.e. the
+  -- earliest in-window reading is old enough) -- sparse charting will
+  -- correctly fail to trigger rather than falsely claim sustained oliguria.
+  uo6.all_below_05 AND uo6.spans_required AS sustained_low_uo_6h,
+  uo12.all_below_05 AND uo12.spans_required AS sustained_low_uo_12h,
+  uo24.all_below_03 AND uo24.spans_required AS sustained_low_uo_24h,
+
+  CASE
+    WHEN uo24.all_below_03 AND uo24.spans_required THEN 3
+    WHEN uo12.all_below_05 AND uo12.spans_required THEN 2
+    WHEN uo6.all_below_05 AND uo6.spans_required THEN 1
+    ELSE 0
+  END AS urine_aki_stage,
+
+  -- Overall stage = worse of the two criteria (standard KDIGO combination rule).
+  GREATEST(
+    CASE
+      WHEN b.creatinine_mg_dl IS NOT NULL AND bl.baseline_creatinine IS NOT NULL
+           AND b.creatinine_mg_dl >= 3.0 * bl.baseline_creatinine THEN 3
+      WHEN b.creatinine_mg_dl IS NOT NULL AND bl.baseline_creatinine IS NOT NULL
+           AND b.creatinine_mg_dl >= 2.0 * bl.baseline_creatinine THEN 2
+      WHEN (b.creatinine_mg_dl IS NOT NULL AND r48.creatinine_48h_ref IS NOT NULL
+            AND (b.creatinine_mg_dl - r48.creatinine_48h_ref) >= 0.3)
+        OR (b.creatinine_mg_dl IS NOT NULL AND bl.baseline_creatinine IS NOT NULL
+            AND b.creatinine_mg_dl >= 1.5 * bl.baseline_creatinine) THEN 1
+      ELSE 0
+    END,
+    CASE
+      WHEN uo24.all_below_03 AND uo24.spans_required THEN 3
+      WHEN uo12.all_below_05 AND uo12.spans_required THEN 2
+      WHEN uo6.all_below_05 AND uo6.spans_required THEN 1
+      ELSE 0
+    END
+  ) AS aki_stage
+
+FROM base b
+LEFT JOIN LATERAL (
+  SELECT MIN((lab_data->>'creatinine_mg_dl')::numeric) AS baseline_creatinine
+  FROM clinical_assessments p
+  WHERE p.encounter_id = b.encounter_id
+    AND p.created_at < b.created_at
+    AND p.created_at >= b.created_at - interval '7 days'
+    AND (p.lab_data->>'creatinine_mg_dl') IS NOT NULL
+) bl ON true
+LEFT JOIN LATERAL (
+  SELECT (p.lab_data->>'creatinine_mg_dl')::numeric AS creatinine_48h_ref
+  FROM clinical_assessments p
+  WHERE p.encounter_id = b.encounter_id
+    AND p.created_at <= b.created_at - interval '48 hours'
+    AND (p.lab_data->>'creatinine_mg_dl') IS NOT NULL
+  ORDER BY p.created_at DESC
+  LIMIT 1
+) r48 ON true
+LEFT JOIN LATERAL (
+  SELECT
+    bool_and((p.lab_data->>'urine_output_ml_kg_hr')::numeric < 0.5) AS all_below_05,
+    (MIN(p.created_at) <= b.created_at - interval '6 hours') AS spans_required
+  FROM clinical_assessments p
+  WHERE p.encounter_id = b.encounter_id
+    AND p.created_at <= b.created_at
+    AND p.created_at >= b.created_at - interval '6 hours'
+    AND (p.lab_data->>'urine_output_ml_kg_hr') IS NOT NULL
+) uo6 ON true
+LEFT JOIN LATERAL (
+  SELECT
+    bool_and((p.lab_data->>'urine_output_ml_kg_hr')::numeric < 0.5) AS all_below_05,
+    (MIN(p.created_at) <= b.created_at - interval '12 hours') AS spans_required
+  FROM clinical_assessments p
+  WHERE p.encounter_id = b.encounter_id
+    AND p.created_at <= b.created_at
+    AND p.created_at >= b.created_at - interval '12 hours'
+    AND (p.lab_data->>'urine_output_ml_kg_hr') IS NOT NULL
+) uo12 ON true
+LEFT JOIN LATERAL (
+  SELECT
+    bool_and((p.lab_data->>'urine_output_ml_kg_hr')::numeric < 0.3) AS all_below_03,
+    (MIN(p.created_at) <= b.created_at - interval '24 hours') AS spans_required
+  FROM clinical_assessments p
+  WHERE p.encounter_id = b.encounter_id
+    AND p.created_at <= b.created_at
+    AND p.created_at >= b.created_at - interval '24 hours'
+    AND (p.lab_data->>'urine_output_ml_kg_hr') IS NOT NULL
+) uo24 ON true;
+
+-- No changes needed anywhere that already reads this view (main.py's
+-- _fetch_latest_assessment_delta does `SELECT *`) -- the new columns
+-- (baseline_creatinine, creatinine_rise_48h, creatinine_ratio_to_baseline,
+-- creatinine_aki_stage, sustained_low_uo_6h/12h/24h, urine_aki_stage,
+-- aki_stage) arrive automatically.

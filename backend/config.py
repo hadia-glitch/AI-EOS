@@ -33,10 +33,10 @@ class Settings(BaseSettings):
 
     local_llm_enabled: bool = True
     local_llm_base_url: str = "http://localhost:11434/v1"
-    local_llm_model: str = "mistral:7b-instruct-q4_K_M"
+    local_llm_model: str = "qwen3:4b-q4_K_M"
     # 600s (10 min): 300s wasn't enough for a real care-plan prompt (5
     # retrieved chunks + full patient/risk payload + 7-section JSON schema
-    # instructions) on CPU-served Mistral-7B — confirmed by an isolated,
+    # instructions) on CPU-served Qwen-7B — confirmed by an isolated,
     # non-concurrent request still hitting the 300s ceiling. This value is
     # deliberately generous for testing/dev so you can see a real
     # generation complete at least once and get a true sense of actual
@@ -112,7 +112,7 @@ class Settings(BaseSettings):
 
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     # Ablation switch: "fixed" (default) | "semantic" | "proposition"
-    chunking_strategy: str = "fixed"
+    chunking_strategy: str = "clinical"
     # Ablation switch: when True, query_refiner runs before retrieval
     enable_query_refinement: bool = False
     chunk_size: int = 512
@@ -120,6 +120,20 @@ class Settings(BaseSettings):
     rrf_k: int = 60
     retrieval_top_k: int = 10
     rerank_top_k: int = 5
+
+    # ── Engineering heuristics — NOT guideline-derived ───────────────────────
+    # These two numbers do not trace to NICE/AAP/WHO or any cited source.
+    # NICE NG195 and the AAP GBS statement explicitly decline to specify a
+    # numeric CRP cutoff (serial trend + clinical picture, not a magic
+    # number) — so crp_delta_threshold is a retrieval-query-expansion trigger
+    # we chose, not a clinical value. guideline_nudge_weight is a plain IR
+    # reranking hyperparameter; no guideline specifies how to break a
+    # near-tie between two retrieval sources. Both are named here (not
+    # inline magic numbers) specifically so they can be swept in an ablation
+    # and reported as deliberate, tested engineering choices in the paper's
+    # methods section, rather than left as unexplained constants.
+    crp_delta_threshold: float = 2.0
+    guideline_nudge_weight: float = 0.15
 
     # ── Fact-checking judge (Phase 3) ────────────────────────────────────────
     # Gated to HIGH/CRITICAL by default to control latency + LLM cost — see

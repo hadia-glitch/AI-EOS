@@ -15,6 +15,7 @@ from config import get_settings
 from rag.guideline_cache import rebuild_all as rebuild_guideline_cache
 from rag.guideline_cache import get_sync_payload as get_guideline_cache_sync_payload
 from rag.ingest import ingest_directory
+from rag.patient_context_builder import build_patient_context
 from rag.retrieve import get_chunk_store, get_rag_health, retrieve_evidence
 from schemas import (
     CarePlanRequest,
@@ -246,15 +247,25 @@ def mobile_config():
 
 @app.post("/api/v1/evidence/search", response_model=list[EvidenceChunkResponse])
 def evidence_search(body: EvidenceSearchRequest):
+    # encounter_id is optional (schemas.py) — the person can ask generally
+    # (omit it, behavior is identical to before) or load a patient as
+    # context (set it, retrieval is biased by that patient's current
+    # symptoms + sustained trends via patient_context_builder.py).
+    context = _safe_build_patient_context(body.encounter_id)
     chunks = retrieve_evidence(
         query=body.query,
         active_guideline=body.active_guideline,
         source_filters=body.source_filters or None,
         top_k=body.limit,
+        context=context,
     )
     log_audit_event(
         action_type="RAG_SEARCH",
-        change_summary={"query": body.query, "results": len(chunks)},
+        change_summary={
+            "query": body.query,
+            "results": len(chunks),
+            "patient_context_loaded": context is not None,
+        },
         rag_chunks_used=[c.to_dict() for c in chunks],
     )
     return [EvidenceChunkResponse(**c.to_dict()) for c in chunks]
@@ -392,11 +403,28 @@ def _trend_fingerprint(deltas: dict | None) -> str:
     return "_".join(parts)
 
 
+def _safe_build_patient_context(encounter_id: str | None):
+    """
+    Never raises — a patient-context build failure degrades to "no patient
+    context" (plain query behavior) rather than blocking retrieval or
+    generation. Returns None if no encounter_id was given at all (the
+    "ask generally, no patient loaded" case).
+    """
+    if not encounter_id:
+        return None
+    try:
+        return build_patient_context(encounter_id)
+    except Exception as e:
+        print(f"[API] patient context build failed for {encounter_id} (non-fatal): {e}")
+        return None
+
+
 def _safe_retrieve_evidence(
     risk_payload: dict,
     active_guideline: str,
     query: str,
     deltas: dict | None = None,
+    context: Any = None,
 ):
     """
     retrieve_evidence() already degrades gracefully internally (seed
@@ -413,6 +441,7 @@ def _safe_retrieve_evidence(
             risk_payload=risk_payload,
             active_guideline=active_guideline,
             deltas=deltas,
+            context=context,
         )
     except Exception as e:
         print(f"[API] retrieve_evidence failed unexpectedly for query='{query[:80]}': {e}")
@@ -462,11 +491,16 @@ def encounter_explanation(encounter_id: str, body: EncounterEvidenceRequest):
 @app.post("/api/v1/encounters/{encounter_id}/care-plan", response_model=ClinicalCarePlanResponse)
 def encounter_care_plan(encounter_id: str, body: CarePlanRequest):
     payload = body.risk_result.model_dump()
-    latest_delta = _fetch_latest_assessment_delta(encounter_id)
+    context = _safe_build_patient_context(encounter_id)
+    # Fall back to the plain delta fetch if context building failed for any
+    # reason — keeps trend-aware retrieval/generation working even if the
+    # richer context query hits a problem the simpler one wouldn't.
+    latest_delta = context.latest_deltas if context else _fetch_latest_assessment_delta(encounter_id)
     chunks = _safe_retrieve_evidence(
         payload, body.active_guideline,
         query=f"EOS care plan {body.active_guideline} {payload.get('category', '')}",
         deltas=latest_delta,
+        context=context,
     )
     try:
         care_plan = generate_care_plan(
@@ -477,6 +511,7 @@ def encounter_care_plan(encounter_id: str, body: CarePlanRequest):
             query=f"EOS care plan {body.active_guideline} {payload.get('category', '')}",
             deltas=latest_delta,
             trend_fingerprint=_trend_fingerprint(latest_delta),
+            context=context,
         )
     except Exception as e:
         print(f"[API] generate_care_plan failed unexpectedly: {e}")

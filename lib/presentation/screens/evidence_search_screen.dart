@@ -41,8 +41,11 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
   String? _lastQuery;
 
   // Feature 2: patient context selector — when a patient is selected, their
-  // de-identified clinical snapshot is injected into both the RAG query and
-  // the AI overview/card prompts so answers apply to this specific patient.
+  // de-identified clinical snapshot is injected into the RAG retrieval
+  // itself (via encounter_id -> patient_context_builder.py on the backend)
+  // AND the AI overview/card prompts, so answers apply to this specific
+  // patient rather than generically. "No patient selected" in the picker
+  // below is the explicit "ask generally" choice.
   PatientParameters? _selectedPatient;
 
   @override
@@ -78,6 +81,10 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
       activeGuideline: guideline,
       sourceFilters: filters,
       limit: 8,
+      // _selectedPatient is null when "No patient selected" (ask generally)
+      // is chosen in the picker below -- this is the retrieval-side half of
+      // the same toggle that already drives the AI overview/card narration.
+      encounterId: _selectedPatient?.id,
     );
 
     if (!mounted) return;

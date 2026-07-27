@@ -222,6 +222,10 @@ def retrieve_evidence(
     top_k: int | None = None,
     refined_query=None,
     deltas: dict | None = None,
+    context: Any = None,  # Optional[PatientContext] — see rag/patient_context_builder.py.
+                          # Biases both risk-payload-driven queries (care plan) AND
+                          # free-text queries (evidence search with a loaded patient)
+                          # with the patient's current symptoms + sustained trends.
 ) -> list[EvidenceChunkResult]:
     settings = get_settings()
     store = get_chunk_store()
@@ -237,14 +241,23 @@ def retrieve_evidence(
         return _fallback_chunks(query or "", active_guideline, top_k or settings.rerank_top_k)
 
     if query is None and risk_payload:
-        query = build_clinical_query(risk_payload, active_guideline, deltas=deltas)
+        query = build_clinical_query(risk_payload, active_guideline, deltas=deltas, context=context)
     if not query:
         query = "EOS neonatal sepsis management guidelines"
 
+    # Free-text queries (evidence search) never go through build_clinical_query,
+    # so if a patient is loaded as context here, its trend/symptom terms need
+    # appending explicitly — build_clinical_query already handles this for the
+    # risk_payload path above, so only do it here to avoid double-appending.
+    if risk_payload is None and context is not None and hasattr(context, "query_context_terms"):
+        extra_terms = context.query_context_terms()
+        if extra_terms:
+            query = query + " " + " ".join(extra_terms)
+
     # Optional query refinement ablation (behind config flag).
-    if settings.enable_query_refinement and risk_payload and refined_query is None:
+    if settings.enable_query_refinement and (risk_payload or context) and refined_query is None:
         from rag.query_refiner import refine_query
-        refined_query = refine_query(query, risk_payload)
+        refined_query = refine_query(query, risk_payload or {}, context=context)
 
     if refined_query is not None and refined_query.action == "decompose":
         from rag.query_refiner import RefinedQuery
@@ -259,6 +272,7 @@ def retrieve_evidence(
                     top_k=top_k,
                     refined_query=RefinedQuery(action="pass_through", sub_queries=[sub_q]),
                     deltas=deltas,
+                    context=context,
                 )
             )
         merged_ids = reciprocal_rank_fusion(
@@ -271,6 +285,21 @@ def retrieve_evidence(
 
     if refined_query is not None and refined_query.sub_queries:
         query = refined_query.sub_queries[0]
+
+    # HyDE (Hypothetical Document Embeddings): when refinement chose "hyde",
+    # embed the LLM's hypothetical guideline passage instead of the query
+    # itself for the SEMANTIC leg only — closes the lexical gap between a
+    # short query and a long guideline passage better than embedding the
+    # bare query does. BM25 below still uses `query` (the real text), never
+    # the hypothetical passage, since lexical matching against invented
+    # text would be actively misleading, not helpful.
+    semantic_query_text = query
+    if (
+        refined_query is not None
+        and refined_query.action == "hyde"
+        and refined_query.hypothetical_document
+    ):
+        semantic_query_text = refined_query.hypothetical_document
 
     print(f"[Retrieval] Query: '{query[:100]}' guideline={active_guideline} store={len(store.chunks)} chunks")
 
@@ -291,15 +320,17 @@ def retrieve_evidence(
 
     retrieve_k = settings.retrieval_top_k
 
-    # Semantic search uses the query as written — embeddings already capture
-    # meaning-level similarity, so synonym-stuffing here would just dilute
-    # the vector. BM25 is pure keyword overlap, so it's expanded with
-    # same-concept clinical terms (see rag/clinical_terms.py) to catch the
-    # "newborn blood infection" vs "early-onset neonatal sepsis" mismatch
-    # that keyword search alone would miss.
+    # Semantic search normally uses the query as written — embeddings already
+    # capture meaning-level similarity, so synonym-stuffing here would just
+    # dilute the vector. When HyDE fired above, semantic_query_text is the
+    # hypothetical passage instead. BM25 is pure keyword overlap and always
+    # uses the real query, expanded with same-concept clinical terms (see
+    # rag/clinical_terms.py) to catch the "newborn blood infection" vs
+    # "early-onset neonatal sepsis" mismatch that keyword search alone would
+    # miss — it never sees the hypothetical passage.
     bm25_query = expand_query(query)
 
-    semantic_hits = store.semantic_search(query, embed_model, top_k=retrieve_k)
+    semantic_hits = store.semantic_search(semantic_query_text, embed_model, top_k=retrieve_k)
     bm25_hits = store.bm25_search(bm25_query, top_k=retrieve_k)
 
     merged = reciprocal_rank_fusion(
@@ -342,13 +373,18 @@ def retrieve_evidence(
     # weak on-guideline chunk beat a strong off-guideline one — it only
     # breaks near-ties) since comparative evidence from other guidelines is
     # still clinically useful and should not be suppressed outright.
+    # nudge weight is an IR engineering hyperparameter (see config.py's
+    # comment above guideline_nudge_weight) -- not derived from any
+    # guideline. Named/configurable specifically so it can be swept in an
+    # ablation (0, 0.05, 0.15, 0.3) rather than defended as a fixed choice.
     guideline_upper = active_guideline.upper()
+    nudge_weight = settings.guideline_nudge_weight
     nudged_scores = []
     for chunk, score in zip(candidates, rerank_scores):
         source = str(chunk.get("source_name", "")).upper() + str(
             (chunk.get("metadata") or {}).get("source", "")
         ).upper()
-        nudge = 0.15 if guideline_upper in source else 0.0
+        nudge = nudge_weight if guideline_upper in source else 0.0
         nudged_scores.append(score + nudge)
 
     order = sorted(

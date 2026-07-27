@@ -18,6 +18,12 @@ class EvidenceApi {
     String activeGuideline = 'NICE',
     List<String> sourceFilters = const [],
     int limit = 8,
+    // When set (a patient is loaded — see EvidenceSearchScreen's picker),
+    // the backend biases retrieval itself with that patient's current
+    // symptoms + sustained trends (rag/patient_context_builder.py), not
+    // just the post-retrieval AI overview/card narration. Null = "ask
+    // generally", unchanged behavior.
+    String? encounterId,
   }) async {
     final backendAvailable = await _client.isBackendAvailable();
     developer.log(
@@ -37,6 +43,7 @@ class EvidenceApi {
           'active_guideline': activeGuideline,
           'source_filters': sourceFilters,
           'limit': limit,
+          if (encounterId != null) 'encounter_id': encounterId,
         },
       );
       final list = response.data as List<dynamic>;

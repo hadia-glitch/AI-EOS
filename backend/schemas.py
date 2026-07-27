@@ -10,6 +10,11 @@ class EvidenceSearchRequest(BaseModel):
     source_filters: list[str] = Field(default_factory=list)
     active_guideline: str = "NICE"
     limit: int = Field(default=5, ge=1, le=20)
+    # When set, retrieval is biased by this patient's current symptoms and
+    # sustained trends (see rag/patient_context_builder.py) -- "load this
+    # patient as context" for evidence search. Optional and additive: a
+    # plain free-text search with no encounter_id behaves exactly as before.
+    encounter_id: str | None = None
 
 
 class EvidenceChunkResponse(BaseModel):
@@ -37,6 +42,23 @@ class PatientSnapshot(BaseModel):
     urine_output_ml_kg_hr: float | None = None
     creatinine_mg_dl: float | None = None
     penicillin_allergy: bool | None = None
+    # Previously captured in clinical_assessments (maternal_data/neonatal_data/
+    # lab_data) but never exposed to the backend risk payload -- query
+    # construction and generation prompts could not see these even though
+    # they were sitting in the DB the whole time. See patient_state.dart's
+    # _upsertClinicalTables for the exact field names these mirror.
+    adequate_intrapartum_antibiotics: bool | None = None
+    clinical_chorioamnionitis: bool | None = None
+    delivery_mode: str | None = None
+    oxygen_need: str | None = None
+    apgar_5_min: int | None = None
+    poor_perfusion: bool | None = None
+    neonatal_temperature: float | None = None
+    neurological_status: str | None = None
+    wbc_count: float | None = None
+    it_ratio: float | None = None
+    platelet_count: float | None = None
+    pct_level: float | None = None
 
 
 class RiskPayload(BaseModel):

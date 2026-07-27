@@ -588,6 +588,7 @@ def _build_care_plan_prompt(
     active_guideline: str,
     chunks: list[EvidenceChunkResult],
     previous_assessments: list[dict[str, Any]],
+    context: Any = None,  # Optional[PatientContext] — see rag/patient_context_builder.py
 ) -> str:
     chunk_text = "\n\n".join(
         f"[{c.chunk_id}] {c.source_name} - {c.section}:\n{c.chunk_text}"
@@ -597,7 +598,15 @@ def _build_care_plan_prompt(
     if hasattr(patient, "model_dump"):
         patient = patient.model_dump()
     valid_ids = [c.chunk_id for c in chunks]
-    trend_block = _summarize_trend(previous_assessments)
+    # Prefer the full-history summary (up to 10 entries, all captured fields
+    # per entry) from PatientContext over the old 5-entry, score-only
+    # _summarize_trend — falls back cleanly when no context was built (e.g.
+    # context-builder failure, or a caller that hasn't been updated).
+    trend_block = (
+        context.history_summary_for_prompt(max_entries=10)
+        if context is not None and hasattr(context, "history_summary_for_prompt")
+        else _summarize_trend(previous_assessments)
+    )
     category = str(risk_payload.get("category", risk_payload.get("risk_category", "")))
 
     return f"""You are NeoGuard AI, a clinical care-plan generation engine for a neonatal early-onset \
@@ -727,7 +736,17 @@ def _apply_deterministic_care_plan_checks(
         patient = patient.model_dump()
 
     proposed_drugs = result.antibiotic_plan.regimen or []
-    det_flags = check_contraindications(patient, proposed_drugs)
+    # deltas carries the latest assessment_deltas view row, including the
+    # KDIGO-staged AKI fields (aki_stage, creatinine_aki_stage,
+    # urine_aki_stage, creatinine_rise_48h, creatinine_ratio_to_baseline,
+    # sustained_low_uo_6h/12h/24h) added by
+    # supabase/migrations/006_aki_staging.sql. Without this kwarg,
+    # check_contraindications() always fell back to the unstaged
+    # single-reading check (see contraindication_rules.py's
+    # _snapshot_fallback_flag) even when real windowed staging data was
+    # available -- this was the one line where that data never actually
+    # reached the contraindication check.
+    det_flags = check_contraindications(patient, proposed_drugs, deltas=deltas)
     det_strings = flags_to_strings(det_flags)
 
     existing = set(result.contraindication_flags)
@@ -966,6 +985,7 @@ def generate_care_plan(
     query: str = "",
     deltas: dict | None = None,
     trend_fingerprint: str = "",
+    context: Any = None,  # Optional[PatientContext] — see rag/patient_context_builder.py
 ) -> ClinicalCarePlanResponse:
     settings = get_settings()
     previous_assessments = previous_assessments or []
@@ -995,7 +1015,7 @@ def generate_care_plan(
         method="hybrid" if chunks else "seed",
     )
 
-    prompt = _build_care_plan_prompt(risk_payload, active_guideline, chunks, previous_assessments)
+    prompt = _build_care_plan_prompt(risk_payload, active_guideline, chunks, previous_assessments, context=context)
 
     # -- 2. Try the LLM provider chain (Local -> Gemini -> Groq) --
     try:
