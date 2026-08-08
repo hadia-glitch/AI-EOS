@@ -30,6 +30,12 @@ class DeidentifiedPatient {
   final double? itRatio;
   final double? plateletCount;
   final double? pctLevel;
+  // Not previously exposed to the backend at all -- see
+  // patient_entry_flow.dart / new_patient_screen.dart for where this is
+  // actually captured now. Feeds rag/query_builder.py's low-birth-weight
+  // query terms and domain/contraindication_rules.check_who_outpatient_exclusions
+  // on the backend (both via schemas.PatientSnapshot.birth_weight_g).
+  final double? birthWeightGrams;
 
   const DeidentifiedPatient({
     this.gestationalAgeWeeks,
@@ -54,6 +60,7 @@ class DeidentifiedPatient {
     this.itRatio,
     this.plateletCount,
     this.pctLevel,
+    this.birthWeightGrams,
   });
 
   Map<String, dynamic> toJson() => {
@@ -80,6 +87,7 @@ class DeidentifiedPatient {
         if (itRatio != null) 'it_ratio': itRatio,
         if (plateletCount != null) 'platelet_count': plateletCount,
         if (pctLevel != null) 'pct_level': pctLevel,
+        if (birthWeightGrams != null) 'birth_weight_g': birthWeightGrams,
       };
 
   static DeidentifiedPatient fromPatient(PatientParameters p) {
@@ -106,6 +114,7 @@ class DeidentifiedPatient {
       itRatio: p.itRatio,
       plateletCount: p.plateletCount,
       pctLevel: p.pctLevel,
+      birthWeightGrams: p.birthWeightGrams,
     );
   }
 }

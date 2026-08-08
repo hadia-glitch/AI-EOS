@@ -19,3 +19,9 @@ pytest>=8.3.0
 pytest-asyncio>=0.24.0
 scikit-learn>=1.5.0
 spacy>=3.7.0
+# Added for backend/rag/pdf_extract.py — structure-aware PDF ingestion
+# (PyMuPDF for per-line font/size/bold metadata + reading order, pdfplumber
+# for table extraction). Required by the new rag/ingest.py pipeline; not
+# needed at query/retrieval time, only for the ingestion admin endpoints.
+PyMuPDF>=1.24.0
+pdfplumber>=0.11.0

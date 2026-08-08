@@ -47,18 +47,44 @@ class OfflinePdfCache {
     }
   }
 
-  static Future<Map<String, dynamic>?> _findDocument(String fileName) async {
+  static Future<Map<String, dynamic>?> _findDocument(
+    String fileName, {
+    ApiClient? client,
+    bool allowSync = true,
+  }) async {
+    Map<String, dynamic>? searchRaw(String? raw) {
+      if (raw == null) return null;
+      try {
+        final docs = jsonDecode(raw) as List<dynamic>;
+        for (final d in docs) {
+          final doc = d as Map<String, dynamic>;
+          if (doc['name'] == fileName) return doc;
+        }
+      } catch (_) {}
+      return null;
+    }
+
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_documentListKey);
-    if (raw == null) return null;
-    try {
-      final docs = jsonDecode(raw) as List<dynamic>;
-      for (final d in docs) {
-        final doc = d as Map<String, dynamic>;
-        if (doc['name'] == fileName) return doc;
-      }
-    } catch (_) {}
-    return null;
+    final found = searchRaw(prefs.getString(_documentListKey));
+    if (found != null || !allowSync) return found;
+
+    // The document list (fileName -> storage_url) is metadata only — a few
+    // KB of JSON, not PDF bytes — but it was previously ONLY ever synced
+    // from inside syncAllPdfs(), AFTER that method's WiFi gate. A device
+    // that has only ever been online on mobile data (or where
+    // ConnectivityService.isOnWifi() misdetects — this happens on some
+    // Android versions without location permission) would therefore never
+    // learn ANY document's storage_url, and getLocalPath below would
+    // always return null and the viewer would misreport "no connection"
+    // even while genuinely online. Sync just the metadata here, on demand,
+    // regardless of connection type, and retry once — this is the "lazy
+    // per-document fallback" this class's docstring already promises.
+    developer.log(
+        '[OfflinePdfCache] "$fileName" not in local document list — syncing metadata on demand',
+        name: 'OfflinePdfCache');
+    await syncDocumentList(client: client);
+    final refreshedPrefs = await SharedPreferences.getInstance();
+    return searchRaw(refreshedPrefs.getString(_documentListKey));
   }
 
   // ── Bulk pre-download (proactive — makes offline viewing "just work") ────
@@ -85,6 +111,14 @@ class OfflinePdfCache {
       final available = await c.isBackendAvailable();
       if (!available) return;
 
+      // Document-list metadata (fileName -> storage_url, a few KB of JSON)
+      // is cheap enough to sync regardless of connection type -- only the
+      // actual PDF bytes below are WiFi-gated. This also means
+      // getLocalPath's on-demand fallback (see _findDocument) almost never
+      // needs its own extra round trip, since the list is normally already
+      // fresh by the time anyone opens a document.
+      await syncDocumentList(client: c);
+
       if (wifiOnly && !await ConnectivityService.instance.isOnWifi()) {
         developer.log('[OfflinePdfCache] Skipping bulk PDF prefetch — not on WiFi '
             '(will still cache lazily per-document on any connection)',
@@ -92,7 +126,6 @@ class OfflinePdfCache {
         return;
       }
 
-      await syncDocumentList(client: c);
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_documentListKey);
       if (raw == null) return;
@@ -127,8 +160,10 @@ class OfflinePdfCache {
 
   /// Returns a local file path for [fileName], downloading it from Supabase
   /// Storage first if not already cached. Returns null if:
-  ///  - the document isn't known yet (document list never synced), or
-  ///  - it's not cached locally AND the backend/storage is unreachable.
+  ///  - the document is genuinely unknown even after an on-demand metadata
+  ///    sync (e.g. never uploaded to Storage, or a fileName typo/mismatch
+  ///    against guideline_documents.name), or
+  ///  - the backend/storage itself is unreachable right now.
   /// [onProgress] receives 0.0-1.0 during download (ignored if already cached).
   static Future<String?> getLocalPath(
     String fileName, {
@@ -136,6 +171,7 @@ class OfflinePdfCache {
     ApiClient? client,
   }) async {
     if (fileName.isEmpty) return null;
+    final c = client ?? apiClient;
 
     final dir = await getApplicationDocumentsDirectory();
     final cacheDir = Directory('${dir.path}/$_cacheDirName');
@@ -146,16 +182,17 @@ class OfflinePdfCache {
       return localFile.path;
     }
 
-    final doc = await _findDocument(fileName);
+    final doc = await _findDocument(fileName, client: c);
     final storageUrl = doc?['storage_url'] as String?;
     if (storageUrl == null || storageUrl.isEmpty) {
-      developer.log('[OfflinePdfCache] No storage_url known for $fileName '
-          '(document list not synced yet, or file not uploaded to Storage)',
+      developer.log('[OfflinePdfCache] No storage_url for "$fileName" even after an '
+          'on-demand metadata sync — either the backend is unreachable right now, or '
+          'this file genuinely has no matching entry in guideline_documents (check for '
+          'a fileName mismatch, or that it was actually uploaded to Storage).',
           name: 'OfflinePdfCache');
       return null;
     }
 
-    final c = client ?? apiClient;
     try {
       final response = await c.dio.get<List<int>>(
         storageUrl,

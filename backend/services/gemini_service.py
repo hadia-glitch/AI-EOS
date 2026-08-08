@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,17 +24,19 @@ from typing import Any
 from config import get_settings
 from db import get_supabase
 from rag.fact_check import (
+    label_evidence_chunks,
     run_fact_check,
     should_fact_check,
     summarize_care_plan_for_judge,
     summarize_explanation_for_judge,
 )
-from rag.retrieve import EvidenceChunkResult
+from rag.retrieve import EvidenceChunkResult, retrieve_evidence
 from schemas import (
     AntibioticPlanSchema,
     CitationItem,
     ClinicalCarePlanResponse,
     EvidenceChunkResponse,
+    EvidenceLabelRef,
     ExplanationResponse,
     FactCheckResult,
 )
@@ -70,6 +73,72 @@ _SOURCE_URLS: dict[str, str] = {
 _CACHE_TTL_HOURS: dict[str, int] = {
     "CRITICAL": 24, "HIGH": 24, "INTERMEDIATE": 12, "LOW": 12,
 }
+
+
+# ── Evidence labels (E1/E2/... citation chips) ─────────────────────────────
+# Both generation prompts (explanation + care plan) used to embed the raw
+# chunk_id UUID directly into the evidence block ("[<uuid>] SOURCE —
+# Section:"), and the LLM would sometimes echo that UUID straight back into
+# driver_breakdown / clinical_summary prose ("chunk ID: 0e782494-2471-..."),
+# which is meaningless to a clinician. fact_check.py already solved this
+# for the judge's own flagged_claims via short E1/E2/... labels — this
+# section reuses that exact same labeling (via label_evidence_chunks, the
+# one place that assigns them) for every OTHER free-text field, and adds a
+# defensive sanitizer in case the model ignores the instruction and prints
+# a raw UUID anyway.
+
+_RAW_CHUNK_CITE_RE = re.compile(
+    r"\(?\s*chunk\s*(?:id)?\s*[:#]?\s*"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+    r"\s*\)?",
+    re.I,
+)
+
+
+def _sanitize_chunk_citations(text: str, id_to_label: dict[str, str]) -> str:
+    """
+    Defensive backstop, not the primary fix (the primary fix is that the
+    prompt no longer shows the model a raw chunk_id to copy — see
+    _build_care_plan_prompt / _build_prompt). Rewrites any literal
+    "(chunk ID: <uuid>)"-style citation the model emitted anyway into the
+    matching [E#] label, or drops it silently if the UUID isn't one of
+    this request's retrieved chunks (a hallucinated ID is worse than no
+    citation at all). No-ops instantly for the common case of no match.
+    """
+    if not text or "chunk" not in text.lower():
+        return text
+
+    def _replace(m: re.Match) -> str:
+        label = id_to_label.get(m.group(1))
+        return f"[{label}]" if label else ""
+
+    cleaned = _RAW_CHUNK_CITE_RE.sub(_replace, text)
+    return " ".join(cleaned.split())
+
+
+def _build_evidence_label_refs(
+    chunks: list[EvidenceChunkResult], label_map: dict[str, str]
+) -> list[EvidenceLabelRef]:
+    """label_map is {label: chunk_id} from label_evidence_chunks(chunks) --
+    turns it into the full EvidenceLabelRef objects the client needs to
+    render a hover/tap citation popup (source, section, excerpt), capping
+    the excerpt so the response doesn't duplicate full chunk text that's
+    already available via rag_chunks/citation_list."""
+    chunk_by_id = {c.chunk_id: c for c in chunks}
+    refs: list[EvidenceLabelRef] = []
+    for label, chunk_id in label_map.items():
+        c = chunk_by_id.get(chunk_id)
+        if not c:
+            continue
+        snippet = " ".join((c.chunk_text or "").split())
+        if len(snippet) > 600:
+            snippet = snippet[:600].rsplit(" ", 1)[0] + "…"
+        refs.append(EvidenceLabelRef(
+            label=label, chunk_id=c.chunk_id, source=c.source, source_name=c.source_name,
+            section=c.section, snippet=snippet, page_number=c.page_number, file_name=c.file_name,
+        ))
+    refs.sort(key=lambda r: int(re.sub(r"\D", "", r.label) or 0))
+    return refs
 
 
 # ── Cache key ─────────────────────────────────────────────────────────────────
@@ -117,12 +186,15 @@ def _check_cache(cache_key: str) -> ExplanationResponse | None:
                 section=c.get("section", ""),
                 chunk_id=c.get("chunk_id", ""),
                 similarity_score=float(c.get("similarity_score", 0.0)),
+                page_number=c.get("page_number"),
+                file_name=c.get("file_name", ""),
             )
             for c in raw_citations
         ]
         model_ver = row.get("gemini_model_version", "unknown")
         print(f"[LLM] Cache HIT key={cache_key} model={model_ver} simulated={is_simulated}")
         fc = resp_json.get("fact_check") or {}
+        raw_labels = resp_json.get("evidence_labels", [])
         return ExplanationResponse(
             clinical_summary=resp_json.get("clinical_summary", ""),
             per_driver_explanations=resp_json.get("per_driver_explanations", []),
@@ -137,6 +209,7 @@ def _check_cache(cache_key: str) -> ExplanationResponse | None:
             model_version=f"cached:{model_ver}",
             fallback_used=is_simulated,
             fact_check=FactCheckResult(**fc) if fc else FactCheckResult(),
+            evidence_labels=[EvidenceLabelRef(**r) for r in raw_labels],
         )
     except Exception as e:
         print(f"[LLM] Cache check failed (non-fatal): {e}")
@@ -173,6 +246,7 @@ def _write_cache(
             "citation_list":           citations_json,
             "confidence_disclaimer":   result.confidence_disclaimer,
             "fact_check":              result.fact_check.model_dump(),
+            "evidence_labels":         [r.model_dump() for r in result.evidence_labels],
         }
         patient = risk_payload.get("patient", {})
         if hasattr(patient, "model_dump"):
@@ -237,17 +311,19 @@ def _build_prompt(
     risk_payload: dict[str, Any],
     active_guideline: str,
     chunks: list[EvidenceChunkResult],
-) -> str:
-    chunk_text = "\n\n".join(
-        f"[{c.chunk_id}] {c.source_name} — {c.section}:\n{c.chunk_text}"
-        for c in chunks
-    )
+) -> tuple[str, dict[str, str]]:
+    # E1/E2/... labels, not raw chunk_id UUIDs -- see the "Evidence labels"
+    # section near the top of this file for why. label_map is {label:
+    # chunk_id}; returned to the caller so _parse_llm_response can build
+    # evidence_labels/sanitize using the IDENTICAL mapping used here.
+    chunk_text, label_map = label_evidence_chunks(chunks)
     patient = risk_payload.get("patient", {})
     if hasattr(patient, "model_dump"):
         patient = patient.model_dump()
     valid_ids = [c.chunk_id for c in chunks]
+    valid_labels = list(label_map.keys())
 
-    return f"""You are NeoGuard AI, a clinical explanation engine. Your only role is to explain \
+    prompt = f"""You are NeoGuard AI, a clinical explanation engine. Your only role is to explain \
 decisions already made by the deterministic EOSCAL rule engine. You do NOT recalculate risk scores \
 or make independent clinical decisions.
 
@@ -269,15 +345,18 @@ RISK RESULT (already calculated — do NOT recalculate):
 - Probability per 1000 births: {risk_payload.get('probability_per_1000', 'N/A')}
 - Risk drivers: {json.dumps(risk_payload.get('drivers', []))}
 
-RETRIEVED GUIDELINE EVIDENCE (valid chunk IDs: {json.dumps(valid_ids)}):
+RETRIEVED GUIDELINE EVIDENCE (cite inline using ONLY these bracketed labels — {json.dumps(valid_labels)} —
+never print a raw chunk ID, UUID, or any identifier not in this list):
 {chunk_text}
 
 INSTRUCTIONS:
 1. Write a clinical_summary of 2-3 sentences explaining why this patient received their risk category.
-2. For each driver in the risk drivers list, write a per_driver_explanation citing the relevant guideline chunk.
+2. For each driver in the risk drivers list, write a per_driver_explanation citing the relevant guideline
+   evidence by its bracketed label only, e.g. "[E2]" — NEVER write out a raw chunk ID or UUID in prose.
 3. List recommended_actions as numbered steps, strictly following {active_guideline} guidance from the chunks.
 4. Write an evidence_summary of 1-2 sentences synthesising the retrieved evidence.
-5. Populate citation_list using ONLY the chunk IDs from the valid list above — never invent IDs.
+5. Populate citation_list using ONLY the real chunk IDs from this list (for internal/structured use only,
+   never printed in prose): {json.dumps(valid_ids)} — never invent IDs.
 6. Every factual claim must trace to a retrieved chunk. Do not add clinical facts not present in the chunks.
 
 Respond with ONLY valid JSON — no markdown fences, no preamble, no trailing text.
@@ -294,6 +373,7 @@ Schema:
   ],
   "confidence_disclaimer": "{DISCLAIMER}"
 }}"""
+    return prompt, label_map
 
 
 # ── Parse LLM JSON response ───────────────────────────────────────────────────
@@ -303,6 +383,7 @@ def _parse_llm_response(
     chunks: list[EvidenceChunkResult],
     model_version: str,
     chunk_responses: list[EvidenceChunkResponse],
+    label_map: dict[str, str] | None = None,
 ) -> ExplanationResponse:
     """Parse JSON from any LLM response. Raises on failure."""
     # Strip markdown fences
@@ -316,16 +397,20 @@ def _parse_llm_response(
     data = json.loads(text)  # raises json.JSONDecodeError on failure
 
     valid_ids = {c.chunk_id for c in chunks}
+    chunk_by_id = {c.chunk_id: c for c in chunks}
     citations: list[CitationItem] = []
     for c in data.get("citation_list", []):
         cid = c.get("chunk_id", "")
         if cid and cid not in valid_ids:
             continue  # drop hallucinated IDs
+        matched = chunk_by_id.get(cid)
         citations.append(CitationItem(
             source=c.get("source", ""),
             section=c.get("section", ""),
             chunk_id=cid,
             similarity_score=float(c.get("similarity_score", 0.0)),
+            page_number=matched.page_number if matched else None,
+            file_name=matched.file_name if matched else "",
         ))
 
     if not citations:
@@ -333,20 +418,33 @@ def _parse_llm_response(
             CitationItem(
                 source=c.source_name, section=c.section,
                 chunk_id=c.chunk_id, similarity_score=c.similarity_score,
+                page_number=c.page_number, file_name=c.file_name,
             )
             for c in chunks
         ]
 
+    label_map = label_map or {}
+    id_to_label = {v: k for k, v in label_map.items()}
+    per_driver = [
+        {
+            "factor": str(d.get("factor", "")),
+            "explanation": _sanitize_chunk_citations(str(d.get("explanation", "")), id_to_label),
+        }
+        for d in data.get("per_driver_explanations", [])
+        if isinstance(d, dict)
+    ]
+
     return ExplanationResponse(
-        clinical_summary=data.get("clinical_summary", ""),
-        per_driver_explanations=data.get("per_driver_explanations", []),
+        clinical_summary=_sanitize_chunk_citations(data.get("clinical_summary", ""), id_to_label),
+        per_driver_explanations=per_driver,
         recommended_actions=data.get("recommended_actions", []),
-        evidence_summary=data.get("evidence_summary", ""),
+        evidence_summary=_sanitize_chunk_citations(data.get("evidence_summary", ""), id_to_label),
         citation_list=citations,
         confidence_disclaimer=data.get("confidence_disclaimer", DISCLAIMER),
         rag_chunks=chunk_responses,
         model_version=model_version,
         fallback_used=False,
+        evidence_labels=_build_evidence_label_refs(chunks, label_map),
     )
 
 
@@ -404,7 +502,8 @@ def _fallback_explanation(
 
     citations = [
         CitationItem(source=c.source_name, section=c.section,
-                     chunk_id=c.chunk_id, similarity_score=c.similarity_score)
+                     chunk_id=c.chunk_id, similarity_score=c.similarity_score,
+                     page_number=c.page_number, file_name=c.file_name)
         for c in chunks
     ]
     drivers_text = ", ".join(
@@ -430,6 +529,7 @@ def _fallback_explanation(
         rag_chunks=[EvidenceChunkResponse(**c.to_dict()) for c in chunks],
         model_version="rule-based-fallback",
         fallback_used=True,
+        evidence_labels=_build_evidence_label_refs(chunks, label_evidence_chunks(chunks)[1]),
     )
 
 
@@ -487,12 +587,12 @@ def generate_explanation(
         method="hybrid" if chunks else "seed",
     )
 
-    prompt = _build_prompt(risk_payload, active_guideline, chunks)
+    prompt, label_map = _build_prompt(risk_payload, active_guideline, chunks)
 
     # ── 3. Try the LLM provider chain (Local -> Gemini -> Groq) ──────────────
     try:
         raw, model_used = call_llm(prompt, settings)
-        result = _parse_llm_response(raw, chunks, model_used, chunk_responses)
+        result = _parse_llm_response(raw, chunks, model_used, chunk_responses, label_map=label_map)
         result.fact_check = _maybe_fact_check_explanation(result, risk_payload, active_guideline, chunks)
         _write_cache(cache_key, risk_payload, active_guideline, result,
                      chunks, model_used, is_simulated=False)
@@ -559,9 +659,17 @@ def _make_care_plan_cache_key(
     active_guideline: str,
     previous_count: int,
     trend_fingerprint: str = "",
+    care_setting: str = "hospital",
 ) -> str:
     fp = f":{trend_fingerprint}" if trend_fingerprint else ""
-    return "careplan:" + _make_cache_key(risk_payload, active_guideline) + f":{previous_count}{fp}"
+    # care_setting is included whenever it's non-default so existing cache
+    # keys for hospital-setting plans (the only setting before this change)
+    # are completely unaffected -- only outpatient-triggered requests get a
+    # distinct key, which is the only case where a wrong cache hit would
+    # actually matter (a hospital-setting plan is never contraindicated
+    # differently than it already is; an outpatient one can be).
+    setting_suffix = f":{care_setting}" if care_setting != "hospital" else ""
+    return "careplan:" + _make_cache_key(risk_payload, active_guideline) + f":{previous_count}{fp}{setting_suffix}"
 
 
 def _summarize_trend(previous_assessments: list[dict[str, Any]]) -> str:
@@ -589,15 +697,18 @@ def _build_care_plan_prompt(
     chunks: list[EvidenceChunkResult],
     previous_assessments: list[dict[str, Any]],
     context: Any = None,  # Optional[PatientContext] — see rag/patient_context_builder.py
-) -> str:
-    chunk_text = "\n\n".join(
-        f"[{c.chunk_id}] {c.source_name} - {c.section}:\n{c.chunk_text}"
-        for c in chunks
-    )
+) -> tuple[str, dict[str, str]]:
+    # E1/E2/... labels, not raw chunk_id UUIDs -- see the "Evidence labels"
+    # section near the top of this file. label_map is {label: chunk_id};
+    # returned to the caller so _parse_care_plan_response can sanitize and
+    # build evidence_labels using the IDENTICAL mapping used here, and so
+    # a later fact-check resolution pass keeps citing the same labels.
+    chunk_text, label_map = label_evidence_chunks(chunks)
     patient = risk_payload.get("patient", {})
     if hasattr(patient, "model_dump"):
         patient = patient.model_dump()
     valid_ids = [c.chunk_id for c in chunks]
+    valid_labels = list(label_map.keys())
     # Prefer the full-history summary (up to 10 entries, all captured fields
     # per entry) from PatientContext over the old 5-entry, score-only
     # _summarize_trend — falls back cleanly when no context was built (e.g.
@@ -609,7 +720,7 @@ def _build_care_plan_prompt(
     )
     category = str(risk_payload.get("category", risk_payload.get("risk_category", "")))
 
-    return f"""You are NeoGuard AI, a clinical care-plan generation engine for a neonatal early-onset \
+    prompt = f"""You are NeoGuard AI, a clinical care-plan generation engine for a neonatal early-onset \
 sepsis (EOS) decision support system. Your only role is to explain and operationalise decisions \
 already made by the deterministic EOSCAL rule engine -- you do NOT recalculate risk scores or make \
 independent clinical decisions. Your output must be understandable and directly actionable by ANY \
@@ -637,7 +748,8 @@ RISK RESULT (already calculated -- do NOT recalculate):
 
 {trend_block}
 
-RETRIEVED GUIDELINE EVIDENCE (valid chunk IDs: {json.dumps(valid_ids)}):
+RETRIEVED GUIDELINE EVIDENCE (cite inline using ONLY these bracketed labels — {json.dumps(valid_labels)} —
+never print a raw chunk ID, UUID, or any identifier not in this list):
 {chunk_text}
 
 INSTRUCTIONS -- produce all 13 sections:
@@ -649,7 +761,8 @@ INSTRUCTIONS -- produce all 13 sections:
 3. trend_narrative: 1-2 sentences purely about the trend across assessments (empty string if only
    one assessment exists).
 4. driver_breakdown: per-driver clinical significance, in plain language, citing the relevant
-   guideline chunk where possible.
+   guideline evidence by its bracketed label only, e.g. "[E2]" — NEVER write out a raw chunk ID
+   or UUID anywhere in this or any other field.
 5. recommended_actions: numbered, concrete, sequential steps for the next 60 minutes. Each action
    must be something a generalist doctor can literally do right now (e.g. "Draw 1-2 mL blood for
    culture from two peripheral sites before the first antibiotic dose"), not a vague instruction.
@@ -665,14 +778,16 @@ INSTRUCTIONS -- produce all 13 sections:
    genuinely not applicable to this risk category.
 10. parent_communication_notes: 2-3 sentences in plain language a clinician can relay to the family.
 11. disambiguation_block: when retrieved chunks from >=2 guideline sources meaningfully conflict
-    on a checkable claim, explain the conflict. Empty if not applicable.
+    on a checkable claim, explain the conflict, citing each side by its bracketed label. Empty if
+    not applicable.
 12. contraindication_flags: your best-effort list of contraindication concerns (deterministic
     checks override these — treat as supplement only).
 13. trend_state_change: when trend data indicates a meaningful category-level shift. Empty if none.
 
-Every factual claim must trace to a retrieved chunk or to the risk result provided. Do not invent
-clinical facts, drug doses, or thresholds not present in the chunks or standard {active_guideline}
-practice.
+Every factual claim must trace to a retrieved chunk (cited as "[E#]") or to the risk result
+provided. Do not invent clinical facts, drug doses, or thresholds not present in the chunks or
+standard {active_guideline} practice. Never print a raw chunk ID or UUID anywhere in your output —
+bracketed labels only.
 
 Respond with ONLY valid JSON -- no markdown fences, no preamble, no trailing text.
 Schema:
@@ -701,6 +816,7 @@ Schema:
   ],
   "confidence_disclaimer": "{DISCLAIMER}"
 }}"""
+    return prompt, label_map
 
 
 def _detect_cross_guideline_conflict(
@@ -719,17 +835,385 @@ def _detect_cross_guideline_conflict(
     return len(off_guideline_sources) >= 2
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Regimen safety net — ported from the care-plan eval harness's real-run
+# findings. contraindication_flags (below, in
+# _apply_deterministic_care_plan_checks) already covers drugs the LLM
+# deliberately WITHHELD for a documented reason; these functions cover a
+# different, arguably worse failure the harness's own real generation runs
+# actually produced: drugs that go missing for NO stated reason at all (a
+# clinician has no flag telling them to look for the gap), urgency wording
+# that doesn't distinguish CRITICAL from HIGH despite the app's own
+# reference logic making that distinction, and confident-looking numeric
+# doses the model stated without them actually being in the retrieved
+# evidence in front of it.
+#
+# Detection (_check_regimen_completeness / _check_ungrounded_dose_claims)
+# and active correction (_apply_regimen_safety_net /
+# _strip_ungrounded_dose_claims) are deliberately separate: a real harness
+# run showed that flagging a gap doesn't help the clinician reading the
+# final plan if nothing acts on the flag, so this actively corrects rather
+# than only annotating. Every correction is tagged "[DETERMINISTIC
+# DEFAULT]" / "[DETERMINISTIC CORRECTION]" in the regimen text itself — a
+# clinician reading the plan must be able to tell "the model produced
+# this" from "the rule engine overrode this", especially for the
+# missing-regimen case, where the rule engine is effectively prescribing
+# rather than just checking.
+# ─────────────────────────────────────────────────────────────────────────
+
+_FIRST_LINE_PAIRS = {
+    "gentamicin": ("benzylpenicillin", "ampicillin", "penicillin"),
+    "benzylpenicillin": ("gentamicin",),
+    "ampicillin": ("gentamicin",),
+}
+_DOSE_TOKEN_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*mg/kg(?:/dose)?|\bevery\s+\d+\s*hours?\b|\bonce\s+(?:a\s+)?daily\b", re.I
+)
+
+_REGIMEN_PLACEHOLDER_PHRASES = (
+    "no specific antibiotic regimen", "regimen not provided", "not provided in",
+    "no antibiotic regimen", "regimen not available",
+)
+_KNOWN_DRUG_WORDS = ("gentamicin", "ampicillin", "benzylpenicillin", "penicillin", "clindamycin", "cefotaxime")
+
+# Corpus-verified defaults. Keep these in sync with any dosing figures your
+# ingested guideline corpus actually contains for the same age bracket
+# (first week of life) — these are deliberately generic/"per institutional
+# formulary" for AAP/NICE since neither guideline's PDF is guaranteed to
+# state a single weight-independent number the way WHO's PSBI guidance does.
+_WHO_AMPICILLIN_DOSE = "50 mg/kg/dose every 12 hours (first week of life)"
+_WHO_GENTAMICIN_DOSE = "5 mg/kg once daily (first week of life)"
+
+_DEFAULT_REGIMEN_BY_GUIDELINE: dict[str, list[str]] = {
+    "WHO": [f"[DETERMINISTIC DEFAULT] Ampicillin IM/IV {_WHO_AMPICILLIN_DOSE}, for at least 10 days",
+            f"[DETERMINISTIC DEFAULT] Gentamicin IM/IV {_WHO_GENTAMICIN_DOSE}, for at least 10 days"],
+    "AAP": ["[DETERMINISTIC DEFAULT] IV ampicillin (dose per institutional neonatal formulary "
+            "— not specified in retrieved evidence)",
+            "[DETERMINISTIC DEFAULT] IV gentamicin (dose per institutional neonatal formulary "
+            "— not specified in retrieved evidence)"],
+    "NICE": ["[DETERMINISTIC DEFAULT] IV benzylpenicillin sodium (dose per NICE-specified "
+             "weight-based protocol — not specified in retrieved evidence)",
+             "[DETERMINISTIC DEFAULT] IV gentamicin (dose per NICE-specified weight-based "
+             "protocol — not specified in retrieved evidence)"],
+}
+_DEFAULT_PARTNER_ENTRY: dict[str, dict[str, str]] = {
+    "WHO": {"ampicillin": _DEFAULT_REGIMEN_BY_GUIDELINE["WHO"][1],
+            "gentamicin": _DEFAULT_REGIMEN_BY_GUIDELINE["WHO"][0]},
+    "AAP": {"ampicillin": _DEFAULT_REGIMEN_BY_GUIDELINE["AAP"][1],
+            "gentamicin": _DEFAULT_REGIMEN_BY_GUIDELINE["AAP"][0]},
+    "NICE": {"benzylpenicillin": _DEFAULT_REGIMEN_BY_GUIDELINE["NICE"][1],
+             "penicillin": _DEFAULT_REGIMEN_BY_GUIDELINE["NICE"][1],
+             "gentamicin": _DEFAULT_REGIMEN_BY_GUIDELINE["NICE"][0]},
+}
+# present_drug -> the plain word to search retrieved chunks for when
+# grounding its missing partner (kept separate from _DEFAULT_PARTNER_ENTRY's
+# values, which are the full hardcoded fallback SENTENCES, not bare words).
+_PARTNER_DRUG_WORD: dict[str, dict[str, str]] = {
+    "WHO": {"ampicillin": "gentamicin", "gentamicin": "ampicillin"},
+    "AAP": {"ampicillin": "gentamicin", "gentamicin": "ampicillin"},
+    "NICE": {"benzylpenicillin": "gentamicin", "penicillin": "gentamicin", "gentamicin": "benzylpenicillin"},
+}
+_CLINDAMYCIN_DEFAULT = ("[DETERMINISTIC DEFAULT] IV clindamycin (per documented penicillin "
+                        "allergy — provides Group B Streptococcus coverage in place of the "
+                        "withheld beta-lactam)")
+
+# Plain search words for the two agents in each guideline's default first-line
+# pair, in the SAME order as _DEFAULT_REGIMEN_BY_GUIDELINE's [beta-lactam,
+# aminoglycoside] pairs above, so `zip(drug_words, default_pair)` in
+# _apply_regimen_safety_net lines up word-to-fallback-sentence correctly.
+# NOTE: this constant was referenced below but never actually defined
+# anywhere in the original module — every "regimen missing entirely" case
+# (guideline == "AAP"/"WHO"/"NICE" with zero antibiotic entries) would have
+# raised a NameError at request time instead of reconstructing a regimen.
+_FIRST_LINE_DRUG_WORDS: dict[str, tuple[str, str]] = {
+    "WHO": ("ampicillin", "gentamicin"),
+    "AAP": ("ampicillin", "gentamicin"),
+    "NICE": ("benzylpenicillin", "gentamicin"),
+}
+
+
+def _derive_contraindication_type(patient: dict, det_flags: list) -> str | None:
+    """
+    Best-effort classification of *why* a drug might legitimately be
+    missing from the regimen, used only to avoid a false-positive
+    "regimen incomplete" flag/correction when the gap is actually
+    intentional (documented penicillin allergy, or gentamicin withheld for
+    staged AKI). Derived from the same deterministic signals
+    _apply_deterministic_care_plan_checks already has on hand — patient
+    snapshot + det_flags from check_contraindications() — not from any new
+    input.
+    """
+    if patient.get("penicillin_allergy") is True:
+        return "penicillin_allergy"
+    if any("gentamicin" in (f.drug or "").lower() for f in det_flags):
+        return "gentamicin_aki"
+    return None
+
+
+def _force_critical_urgency(result: ClinicalCarePlanResponse, category: str) -> None:
+    """urgency is a controlled field with real clinical meaning (how fast a
+    dose must be given), not free text -- don't let LLM phrasing variance
+    (observed in a real harness run: every CRITICAL case still said the
+    same 'Within 1 hour' as HIGH cases) blur a distinction the app's own
+    reference logic makes. Mutates result.antibiotic_plan in place."""
+    abx = result.antibiotic_plan
+    if abx.required and category == "CRITICAL":
+        abx.urgency = "Immediate (within 1 hour)"
+    elif abx.required and not abx.urgency:
+        abx.urgency = "Within 1 hour"
+
+
+def _check_regimen_completeness(regimen: list[str], required: bool, contraindication_type: str | None) -> bool:
+    """Flags a beta-lactam present without its paired aminoglycoside (or
+    vice versa) when antibiotics are required and there's no documented
+    contraindication explaining the gap — e.g. a real harness run's
+    NICE/CRITICAL, blood-culture-positive case that generated
+    benzylpenicillin monotherapy with gentamicin silently absent (not
+    withheld, not substituted — just missing)."""
+    if not required:
+        return False
+    regimen_blob = " || ".join(regimen).lower()
+    present = {drug for drug in _FIRST_LINE_PAIRS if drug in regimen_blob}
+    if not present:
+        return False
+    for drug in present:
+        for partner in _FIRST_LINE_PAIRS[drug]:
+            if partner in regimen_blob:
+                return False  # a valid pairing was found somewhere in the regimen
+    if contraindication_type == "gentamicin_aki":
+        return False  # gentamicin is EXPECTED to be the missing/withheld one here
+    return True
+
+
+def _check_ungrounded_dose_claims(regimen: list[str], chunks: list[EvidenceChunkResult]) -> list[str]:
+    """Extracts numeric dose/frequency tokens (e.g. '5 mg/kg', 'every 8
+    hours', 'once daily') from the generated regimen and flags any that
+    don't appear verbatim in the retrieved chunk text — i.e. a specific,
+    confident-looking number the model stated without it actually being in
+    front of it. Deliberately strict verbatim matching, not fuzzy: a real
+    harness run showed the model can be numerically confident AND wrong
+    (gentamicin '2.5 mg/kg every 12 hours' vs. the real WHO corpus's
+    '5 mg/kg once a day' for the exact same age bracket) — a paraphrase-
+    tolerant check would have missed exactly that error."""
+    if not regimen:
+        return []
+    context_blob = " ".join(c.chunk_text for c in chunks)
+    context_blob = " ".join(context_blob.replace("\xa0", " ").split()).lower()
+    flagged = []
+    for entry in regimen:
+        for tok in _DOSE_TOKEN_RE.findall(entry):
+            tok_norm = " ".join(tok.replace("\xa0", " ").split()).lower()
+            if tok_norm not in context_blob:
+                flagged.append(f"'{tok.strip()}' in \"{entry[:80]}\"")
+    return flagged
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _find_grounded_drug_text(drug_word: str, chunks: list[EvidenceChunkResult]) -> str | None:
+    """
+    Searches the chunks ACTUALLY RETRIEVED for this request for a sentence
+    naming *drug_word* — preferring one that also contains a recognizable
+    dose/frequency token (_DOSE_TOKEN_RE) so what gets injected is a real,
+    specific instruction rather than a passing mention. Returns
+    "<sentence> (<source name>)" or None if nothing in the current
+    retrieval mentions the drug at all.
+
+    This exists so the regimen safety net is grounded in what was actually
+    retrieved for THIS patient/query rather than reaching for a hardcoded
+    constant whenever the LLM is available and evidence was retrieved — the
+    hardcoded defaults (_DEFAULT_REGIMEN_BY_GUIDELINE etc., below) are now a
+    last resort, used only when the current retrieval genuinely contains
+    nothing usable, not the first move.
+    """
+    best_with_dose = None
+    best_any = None
+    for c in chunks:
+        if not c.chunk_text:
+            continue
+        for sentence in _SENTENCE_SPLIT_RE.split(c.chunk_text):
+            if drug_word not in sentence.lower():
+                continue
+            sentence_clean = " ".join(sentence.split())
+            if not sentence_clean or len(sentence_clean) > 220:
+                continue  # empty or too long to be a clean single-drug instruction
+            tagged = f"{sentence_clean} ({c.source_name or c.source})"
+            if best_with_dose is None and _DOSE_TOKEN_RE.search(sentence_clean):
+                best_with_dose = tagged
+            elif best_any is None:
+                best_any = tagged
+        if best_with_dose:
+            break
+    return best_with_dose or best_any
+
+
+def _is_regimen_missing(regimen: list[str]) -> bool:
+    if not regimen:
+        return True
+    blob = " || ".join(regimen).lower()
+    has_drug_word = any(w in blob for w in _KNOWN_DRUG_WORDS)
+    has_placeholder = any(p in blob for p in _REGIMEN_PLACEHOLDER_PHRASES)
+    return has_placeholder and not has_drug_word
+
+
+def _apply_regimen_safety_net(
+    result: ClinicalCarePlanResponse,
+    guideline: str,
+    contraindication_type: str | None,
+    chunks: list[EvidenceChunkResult],
+) -> list[str]:
+    """Active correction (mutates result.antibiotic_plan.regimen in place),
+    not just detection. Returns the list of correction notes applied (for
+    logging). Idempotent-ish: safe to call once per generation; does
+    nothing if the regimen already looks complete.
+
+    GROUNDING (see _find_grounded_drug_text above): every injection below
+    tries the CURRENT retrieval's chunks first — "[FROM RETRIEVED EVIDENCE]"
+    tag — and only reaches for the hardcoded "[DETERMINISTIC DEFAULT]"
+    constants when this request's retrieval genuinely contains nothing
+    usable for that drug. This keeps care-plan generation grounded in
+    retrieved evidence whenever the LLM ran and evidence was retrieved for
+    it, rather than the safety net silently substituting hardcoded text
+    for a section even on a successful LLM generation.
+
+    Corrections, in order:
+      1. Nothing there at all -> inject the full guideline-appropriate
+         two-agent regimen, grounded per-agent against the current
+         retrieval (penicillin-allergy cases get clindamycin substituted
+         for the beta-lactam agent).
+      2. A first-line agent present with its expected partner missing and
+         no contraindication explaining the gap -> inject just the missing
+         partner, grounded first.
+      3. Penicillin allergy without an actual Gram-positive-covering
+         alternative present -> inject clindamycin, grounded first.
+      4. WHO cases naming benzylpenicillin (NICE's drug, not WHO's) ->
+         corrected to ampicillin, WHO's actual first-line agent — a
+         guideline-identity fact, not something that should depend on
+         retrieval quality, so this one is never grounding-first.
+    """
+    notes: list[str] = []
+    abx = result.antibiotic_plan
+    if not abx.required:
+        return notes
+
+    guideline = guideline.upper()
+    regimen = list(abx.regimen)
+
+    def grounded_or_default(drug_word: str, default_text: str) -> str:
+        grounded = _find_grounded_drug_text(drug_word, chunks)
+        if grounded:
+            notes.append(f"grounded '{drug_word}' entry in retrieved evidence")
+            return f"[FROM RETRIEVED EVIDENCE] {grounded}"
+        notes.append(f"no retrieved evidence mentioned '{drug_word}' — used hardcoded default")
+        return default_text
+
+    if _is_regimen_missing(regimen):
+        drug_words = _FIRST_LINE_DRUG_WORDS.get(guideline, _FIRST_LINE_DRUG_WORDS["NICE"])
+        default_pair = _DEFAULT_REGIMEN_BY_GUIDELINE.get(guideline, _DEFAULT_REGIMEN_BY_GUIDELINE["NICE"])
+        regimen = [grounded_or_default(w, d) for w, d in zip(drug_words, default_pair)]
+        notes.append(f"regimen was missing entirely — reconstructed {guideline} two-agent regimen")
+        if contraindication_type == "penicillin_allergy":
+            regimen = [e for e in regimen if "ampicillin" not in e.lower() and "benzylpenicillin" not in e.lower()]
+            regimen.insert(0, grounded_or_default("clindamycin", _CLINDAMYCIN_DEFAULT))
+            notes.append("penicillin-allergy case — substituted clindamycin for the beta-lactam agent")
+    else:
+        if _check_regimen_completeness(regimen, True, contraindication_type):
+            blob = " || ".join(regimen).lower()
+            present_drug = next((d for d in _DEFAULT_PARTNER_ENTRY.get(guideline, {}) if d in blob), None)
+            if present_drug:
+                partner_word = _PARTNER_DRUG_WORD.get(guideline, {}).get(present_drug, "gentamicin")
+                partner_default = _DEFAULT_PARTNER_ENTRY[guideline][present_drug]
+                regimen.append(grounded_or_default(partner_word, partner_default))
+                notes.append(f"'{present_drug}' present without its expected partner drug — injected the missing agent")
+
+        if contraindication_type == "penicillin_allergy":
+            blob = " || ".join(regimen).lower()
+            if "clindamycin" not in blob:
+                regimen.append(grounded_or_default("clindamycin", _CLINDAMYCIN_DEFAULT))
+                notes.append("penicillin allergy documented but no Gram-positive-covering "
+                             "alternative was present — injected clindamycin")
+
+    if guideline == "WHO":
+        corrected = []
+        who_name_fixed = False
+        for e in regimen:
+            if re.search(r"\bbenzylpenicillin(?:\s+sodium)?\b", e, re.I) and "ampicillin" not in e.lower():
+                e = re.sub(r"\bbenzylpenicillin(?:\s+sodium)?\b", "ampicillin", e, flags=re.I)
+                who_name_fixed = True
+            corrected.append(e)
+        regimen = corrected
+        if who_name_fixed:
+            notes.append("WHO case named benzylpenicillin (NICE's agent) — corrected to "
+                         "ampicillin (WHO's actual first-line agent)")
+
+    abx.regimen = regimen
+    return notes
+
+
+def _strip_ungrounded_dose_claims(
+    result: ClinicalCarePlanResponse, chunks: list[EvidenceChunkResult]
+) -> list[str]:
+    """Replaces any regimen entry containing a numeric dose/frequency token
+    not found in the retrieved evidence with an explicit 'not specified in
+    retrieved evidence' note, instead of leaving a confident, ungrounded
+    number in a clinician-facing plan. Runs AFTER _apply_regimen_safety_net
+    so newly-injected "[DETERMINISTIC DEFAULT]" entries are SKIPPED here —
+    their dose figures are known-correct hardcoded constants (see
+    _WHO_AMPICILLIN_DOSE / _WHO_GENTAMICIN_DOSE above), not claims the LLM
+    made that need grounding-verification against this specific retrieval;
+    running them back through this same token check would strip a real,
+    correct dose just because this particular request's chunks happened
+    not to contain it verbatim. Mutates result.antibiotic_plan.regimen in
+    place; returns correction notes for logging."""
+    abx = result.antibiotic_plan
+    regimen = list(abx.regimen)
+    if not regimen:
+        return []
+
+    context_blob = " ".join(c.chunk_text for c in chunks)
+    context_blob = " ".join(context_blob.replace("\xa0", " ").split()).lower()
+
+    notes = []
+    cleaned = []
+    for entry in regimen:
+        if entry.startswith("[DETERMINISTIC DEFAULT]"):
+            cleaned.append(entry)
+            continue
+        stripped_tokens = []
+        for tok in _DOSE_TOKEN_RE.findall(entry):
+            tok_norm = " ".join(tok.replace("\xa0", " ").split()).lower()
+            if tok_norm not in context_blob:
+                stripped_tokens.append(tok)
+        if stripped_tokens:
+            new_entry = _DOSE_TOKEN_RE.sub("", entry)
+            new_entry = " ".join(new_entry.split()).rstrip(",;")
+            new_entry = f"{new_entry} [dose/frequency not specified in retrieved evidence]"
+            notes.append(f"stripped ungrounded {stripped_tokens} from \"{entry[:60]}\"")
+            cleaned.append(new_entry)
+        else:
+            cleaned.append(entry)
+
+    abx.regimen = cleaned
+    return notes
+
+
 def _apply_deterministic_care_plan_checks(
     result: ClinicalCarePlanResponse,
     risk_payload: dict[str, Any],
     chunks: list[EvidenceChunkResult],
     active_guideline: str,
     deltas: dict | None = None,
+    care_setting: str = "hospital",
 ) -> tuple[ClinicalCarePlanResponse, bool]:
     """
     Run deterministic overrides. Returns (updated_result, missed_required_disambiguation).
     """
-    from domain.contraindication_rules import check_contraindications, flags_to_strings
+    from domain.contraindication_rules import (
+        check_contraindications,
+        check_who_outpatient_exclusions,
+        flags_to_strings,
+    )
 
     patient = risk_payload.get("patient", {})
     if hasattr(patient, "model_dump"):
@@ -747,6 +1231,11 @@ def _apply_deterministic_care_plan_checks(
     # available -- this was the one line where that data never actually
     # reached the contraindication check.
     det_flags = check_contraindications(patient, proposed_drugs, deltas=deltas)
+    # care_setting defaults to "hospital", making this a no-op for every
+    # existing caller until care_setting is actually threaded from a real
+    # outpatient-triage entry point (see schemas.CarePlanRequest.care_setting
+    # and main.py's care-plan endpoint).
+    det_flags = det_flags + check_who_outpatient_exclusions(patient, care_setting=care_setting)
     det_strings = flags_to_strings(det_flags)
 
     existing = set(result.contraindication_flags)
@@ -766,6 +1255,30 @@ def _apply_deterministic_care_plan_checks(
                 f"(delta {score_delta}) since last assessment."
             )
 
+    # ── Regimen safety net (see functions above) ──────────────────────────
+    # Sequencing mirrors the eval harness's generate_care_plan_harness():
+    # force urgency wording first, THEN detect regimen issues against the
+    # pre-correction plan (so logging honestly reflects what the raw LLM
+    # output looked like), THEN actively correct.
+    category = str(risk_payload.get("category", risk_payload.get("risk_category", ""))).upper()
+    contraindication_type = _derive_contraindication_type(patient, det_flags)
+
+    _force_critical_urgency(result, category)
+
+    regimen_incomplete = _check_regimen_completeness(
+        result.antibiotic_plan.regimen, result.antibiotic_plan.required, contraindication_type,
+    )
+    ungrounded_dose_claims = _check_ungrounded_dose_claims(result.antibiotic_plan.regimen, chunks)
+
+    net_notes = _apply_regimen_safety_net(result, active_guideline, contraindication_type, chunks)
+    dose_notes = _strip_ungrounded_dose_claims(result, chunks)
+
+    if regimen_incomplete or ungrounded_dose_claims or net_notes or dose_notes:
+        print(
+            f"[CarePlan] Regimen safety net — incomplete_before_fix={regimen_incomplete} "
+            f"ungrounded_before_fix={ungrounded_dose_claims} corrections={net_notes + dose_notes}"
+        )
+
     return result, missed_disambiguation
 
 
@@ -777,6 +1290,7 @@ def _parse_care_plan_response(
     risk_payload: dict[str, Any] | None = None,
     active_guideline: str = "NICE",
     deltas: dict | None = None,
+    label_map: dict[str, str] | None = None,
 ) -> ClinicalCarePlanResponse:
     text = raw.strip()
     if text.startswith("```"):
@@ -788,21 +1302,26 @@ def _parse_care_plan_response(
     data = json.loads(text)  # raises on failure -- caller falls back
 
     valid_ids = {c.chunk_id for c in chunks}
+    chunk_by_id = {c.chunk_id: c for c in chunks}
     citations: list[CitationItem] = []
     for c in data.get("citation_list", []):
         cid = c.get("chunk_id", "")
         if cid and cid not in valid_ids:
             continue
+        matched = chunk_by_id.get(cid)
         citations.append(CitationItem(
             source=c.get("source", ""),
             section=c.get("section", ""),
             chunk_id=cid,
             similarity_score=float(c.get("similarity_score", 0.0)),
+            page_number=matched.page_number if matched else None,
+            file_name=matched.file_name if matched else "",
         ))
     if not citations:
         citations = [
             CitationItem(source=c.source_name, section=c.section,
-                         chunk_id=c.chunk_id, similarity_score=c.similarity_score)
+                         chunk_id=c.chunk_id, similarity_score=c.similarity_score,
+                         page_number=c.page_number, file_name=c.file_name)
             for c in chunks
         ]
 
@@ -815,25 +1334,36 @@ def _parse_care_plan_response(
         stop_criteria=str(abx.get("stop_criteria", "")),
     )
 
+    # Defensive backstop: rewrite any raw chunk_id UUID the model printed
+    # anyway (despite the prompt only offering [E#] labels) back into the
+    # matching label, across every free-text field — see
+    # _sanitize_chunk_citations's docstring.
+    label_map = label_map or {}
+    id_to_label = {v: k for k, v in label_map.items()}
+
+    def _clean(value: Any) -> str:
+        return _sanitize_chunk_citations(str(value or ""), id_to_label)
+
     result = ClinicalCarePlanResponse(
-        clinical_summary=data.get("clinical_summary", ""),
-        risk_analysis=data.get("risk_analysis", ""),
-        trend_narrative=data.get("trend_narrative", ""),
-        driver_breakdown=data.get("driver_breakdown", ""),
+        clinical_summary=_clean(data.get("clinical_summary", "")),
+        risk_analysis=_clean(data.get("risk_analysis", "")),
+        trend_narrative=_clean(data.get("trend_narrative", "")),
+        driver_breakdown=_clean(data.get("driver_breakdown", "")),
         recommended_actions=[str(a) for a in data.get("recommended_actions", [])],
         antibiotic_plan=antibiotic_plan,
-        monitoring_plan=data.get("monitoring_plan", ""),
-        escalation_criteria=data.get("escalation_criteria", ""),
+        monitoring_plan=_clean(data.get("monitoring_plan", "")),
+        escalation_criteria=_clean(data.get("escalation_criteria", "")),
         citation_list=citations,
         confidence_disclaimer=data.get("confidence_disclaimer", DISCLAIMER),
         rag_chunks=chunk_responses,
         model_version=model_version,
         fallback_used=False,
-        nutrition_fluid_plan=str(data.get("nutrition_fluid_plan", "")),
-        parent_communication_notes=str(data.get("parent_communication_notes", "")),
-        disambiguation_block=str(data.get("disambiguation_block", "")),
+        nutrition_fluid_plan=_clean(data.get("nutrition_fluid_plan", "")),
+        parent_communication_notes=_clean(data.get("parent_communication_notes", "")),
+        disambiguation_block=_clean(data.get("disambiguation_block", "")),
         contraindication_flags=[str(f) for f in data.get("contraindication_flags", [])],
-        trend_state_change=str(data.get("trend_state_change", "")),
+        trend_state_change=_clean(data.get("trend_state_change", "")),
+        evidence_labels=_build_evidence_label_refs(chunks, label_map),
     )
     return result
 
@@ -911,7 +1441,8 @@ def _fallback_care_plan(
 
     citations = [
         CitationItem(source=c.source_name, section=c.section,
-                     chunk_id=c.chunk_id, similarity_score=c.similarity_score)
+                     chunk_id=c.chunk_id, similarity_score=c.similarity_score,
+                     page_number=c.page_number, file_name=c.file_name)
         for c in chunks
     ]
 
@@ -947,6 +1478,7 @@ def _fallback_care_plan(
         rag_chunks=[EvidenceChunkResponse(**c.to_dict()) for c in chunks],
         model_version="rule-based-fallback",
         fallback_used=True,
+        evidence_labels=_build_evidence_label_refs(chunks, label_evidence_chunks(chunks)[1]),
     )
 
 
@@ -977,6 +1509,286 @@ def _maybe_fact_check_care_plan(
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Fact-check RESOLUTION agent
+#
+# fact_check.py only *flags* problems. Nothing previously acted on
+# flagged_claims — a HIGH/CRITICAL care plan could ship to a clinician with
+# a visible "Fact-check flagged this output" banner and no attempt to
+# actually fix what it flagged. This closes that loop.
+#
+# For each flagged claim, two moves are tried in order, then the judge is
+# re-run against the corrected draft — repeat until verified or a small
+# iteration cap is hit (a genuinely unresolvable claim must not loop
+# forever):
+#   1. Targeted re-retrieval + grounding. The claim text IS a description
+#      of what's missing ("the draft states a dose ... not supported by
+#      the provided sources"), so it doubles as a search query. Crucially
+#      this search is NOT source-filtered to the active guideline (see
+#      retrieve_evidence — active_guideline is only a rerank nudge, never a
+#      hard filter), so a fact missing from NICE's corpus but present in
+#      WHO's or AAP's gets found and used. This is the literal "get
+#      answers from another guideline if not available in the active one"
+#      behavior.
+#   2. Deterministic fallback. If the wider corpus still has nothing, the
+#      same hardcoded [DETERMINISTIC DEFAULT] constants the initial
+#      regimen safety net uses are applied — never left as a fabricated,
+#      judge-flagged specific.
+# Every action taken is appended to resolution_log so the clinician sees
+# what changed, not just that fact-check now passes silently.
+# ─────────────────────────────────────────────────────────────────────────
+
+_MAX_RESOLUTION_ITERATIONS = 3
+
+_RESOLUTION_STOPWORDS = frozenset({
+    "this", "that", "with", "from", "have", "does", "claim", "claims", "draft",
+    "states", "state", "specific", "provided", "sources", "source", "evidence",
+    "which", "supported", "unsupported", "material", "clinical", "there", "here",
+    "into", "than", "also", "were", "been", "being", "about", "would", "could",
+})
+
+
+def _claim_mentions_drug(claim: str) -> str | None:
+    claim_lower = claim.lower()
+    for word in _KNOWN_DRUG_WORDS:
+        if word in claim_lower:
+            return word
+    return None
+
+
+def _resolve_regimen_claim(
+    result: ClinicalCarePlanResponse,
+    drug_word: str,
+    active_guideline: str,
+    pool_chunks: list[EvidenceChunkResult],
+) -> str | None:
+    """Re-grounds the flagged regimen entry naming *drug_word* against the
+    (possibly newly-expanded) chunk pool, falling back to the same
+    hardcoded default the initial safety net uses. Returns a log line, or
+    None if this care plan's regimen doesn't actually contain that drug
+    (caller then tries the generic field resolver instead)."""
+    abx = result.antibiotic_plan
+    regimen = list(abx.regimen)
+    target_idx = next((i for i, e in enumerate(regimen) if drug_word in e.lower()), None)
+    if target_idx is None:
+        return None
+
+    grounded = _find_grounded_drug_text(drug_word, pool_chunks)
+    if grounded:
+        source_note = grounded.rsplit("(", 1)[-1].rstrip(")") if "(" in grounded else active_guideline
+        regimen[target_idx] = f"[FROM RETRIEVED EVIDENCE] {grounded}"
+        abx.regimen = regimen
+        return f"'{drug_word}' dosing: grounded from wider retrieval ({source_note})"
+
+    guideline = active_guideline.upper()
+    default_text = _DEFAULT_PARTNER_ENTRY.get(guideline, {}).get(drug_word)
+    if default_text is None:
+        default_text = next(
+            (d for d in _DEFAULT_REGIMEN_BY_GUIDELINE.get(guideline, []) if drug_word in d.lower()), None
+        )
+    if default_text is None and drug_word == "clindamycin":
+        default_text = _CLINDAMYCIN_DEFAULT
+    if default_text is None:
+        return None
+    regimen[target_idx] = default_text
+    abx.regimen = regimen
+    return f"'{drug_word}' dosing: no support anywhere in the wider corpus — applied [DETERMINISTIC DEFAULT]"
+
+
+def _resolve_disambiguation_claim(
+    result: ClinicalCarePlanResponse,
+    active_guideline: str,
+    chunks: list[EvidenceChunkResult],
+) -> str:
+    active_upper = active_guideline.upper()
+    active_sources = sorted({
+        (c.source_name or c.source or "").strip()
+        for c in chunks
+        if (c.source or "").strip().upper() == active_upper
+    }) or [active_guideline]
+    other_sources = sorted({
+        (c.source_name or c.source or "").strip()
+        for c in chunks
+        if (c.source or "").strip().upper() != active_upper and (c.source_name or c.source or "").strip()
+    })
+    note = (
+        f"[DETERMINISTIC DEFAULT] Retrieved evidence included guidance from more than one "
+        f"guideline source ({', '.join(active_sources)}"
+        + (f" plus {', '.join(other_sources)}" if other_sources else "")
+        + f"). This plan follows {active_guideline} as the active guideline for this encounter; "
+        "if managing under a different protocol, cross-check recommendations against that "
+        "guideline directly before acting."
+    )
+    result.disambiguation_block = (result.disambiguation_block.strip() + " " + note).strip()
+    return "disambiguation_block was empty despite a detected cross-guideline conflict — filled with a deterministic disclosure"
+
+
+_RESOLUTION_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "nutrition_fluid_plan": ("feed", "fluid", "enteral", "hydration", "dextrose", "trophic"),
+    "monitoring_plan": ("monitor", "crp", "culture", "recheck", "reassess", "vital"),
+    "escalation_criteria": ("escalat", "deteriorat", "transfer", "refer", "senior"),
+    "trend_narrative": ("trend", "deteriorat", "improv", "trajectory"),
+}
+
+
+def _resolve_generic_field_claim(
+    result: ClinicalCarePlanResponse,
+    claim: str,
+    pool_chunks: list[EvidenceChunkResult],
+) -> str | None:
+    """
+    Best-effort resolution for a flagged claim that doesn't name a drug and
+    isn't the missed-disambiguation case — e.g. an unsupported specific
+    duration/threshold buried in nutrition_fluid_plan or monitoring_plan.
+    The target field is *guessed* from keyword overlap between the claim
+    text and each field's known vocabulary (the judge's prose doesn't name
+    a schema field, so this is necessarily approximate). Looks for a
+    grounded sentence in the wider corpus; if found, appends it as a cited
+    correction, otherwise appends an explicit caveat so the unsupported
+    specific isn't left standing unqualified.
+    """
+    claim_lower = claim.lower()
+    target_field = next(
+        (f for f, kws in _RESOLUTION_FIELD_KEYWORDS.items() if any(k in claim_lower for k in kws)),
+        None,
+    )
+    if target_field is None:
+        return None
+
+    current_text = getattr(result, target_field, "") or ""
+    query_words = [
+        w for w in re.findall(r"[a-zA-Z]{4,}", claim)
+        if w.lower() not in _RESOLUTION_STOPWORDS
+    ]
+    query_words_lower = {w.lower() for w in query_words}
+
+    grounded_sentence: str | None = None
+    for c in pool_chunks:
+        if not c.chunk_text:
+            continue
+        for sentence in _SENTENCE_SPLIT_RE.split(c.chunk_text):
+            sentence_clean = " ".join(sentence.split())
+            if not sentence_clean or len(sentence_clean) > 240:
+                continue
+            overlap = sum(1 for w in query_words_lower if w in sentence_clean.lower())
+            if overlap >= 2:
+                grounded_sentence = f"{sentence_clean} ({c.source_name or c.source})"
+                break
+        if grounded_sentence:
+            break
+
+    if grounded_sentence:
+        setattr(result, target_field, f"{current_text} [FROM RETRIEVED EVIDENCE] {grounded_sentence}".strip())
+        return f"{target_field}: unsupported specific — appended a grounded sentence from wider retrieval"
+
+    setattr(
+        result, target_field,
+        f"{current_text} [DETERMINISTIC DEFAULT — the specific detail the fact-check judge flagged here "
+        f"is not present in any retrieved guideline evidence; follow unit protocol and clinical "
+        f"judgement for this specific.]".strip(),
+    )
+    return f"{target_field}: unsupported specific with no corpus support anywhere — flagged explicitly rather than left unqualified"
+
+
+def _resolve_flagged_claims(
+    result: ClinicalCarePlanResponse,
+    risk_payload: dict[str, Any],
+    active_guideline: str,
+    chunks: list[EvidenceChunkResult],
+    deltas: dict | None,
+    missed_required_disambiguation: bool,
+) -> tuple[ClinicalCarePlanResponse, FactCheckResult, list[str]]:
+    """Runs fact-check, then iteratively tries to clear every flagged claim
+    (see module section header above), re-verifying after each pass. Always
+    returns (possibly-corrected result, final FactCheckResult, resolution_log)
+    — never raises; a resolution step that can't help a given claim just
+    leaves it for the log and moves on, so one stubborn claim can't break
+    plan generation."""
+    resolution_log: list[str] = []
+    fact_check = _maybe_fact_check_care_plan(
+        result, risk_payload, active_guideline, chunks,
+        deltas=deltas, missed_required_disambiguation=missed_required_disambiguation,
+    )
+    if not fact_check.performed:
+        return result, fact_check, resolution_log
+
+    pool_chunks: list[EvidenceChunkResult] = list(chunks)
+    seen_ids = {c.chunk_id for c in pool_chunks}
+    iterations_run = 0
+
+    for iteration in range(1, _MAX_RESOLUTION_ITERATIONS + 1):
+        iterations_run = iteration
+        if fact_check.verified and not fact_check.flagged_claims:
+            break
+        if not fact_check.flagged_claims:
+            if missed_required_disambiguation and not result.disambiguation_block.strip():
+                resolution_log.append(_resolve_disambiguation_claim(result, active_guideline, chunks))
+                missed_required_disambiguation = False
+                fact_check = _maybe_fact_check_care_plan(
+                    result, risk_payload, active_guideline, chunks,
+                    deltas=deltas, missed_required_disambiguation=missed_required_disambiguation,
+                )
+            break
+
+        print(f"[FactCheckResolver] iteration {iteration}: {len(fact_check.flagged_claims)} flagged claim(s)")
+        made_progress = False
+
+        for claim in fact_check.flagged_claims:
+            if "MISSED_REQUIRED_DISCLOSURE" in claim and not result.disambiguation_block.strip():
+                resolution_log.append(_resolve_disambiguation_claim(result, active_guideline, chunks))
+                missed_required_disambiguation = False
+                made_progress = True
+                continue
+
+            drug_word = _claim_mentions_drug(claim)
+            if drug_word:
+                try:
+                    extra = retrieve_evidence(
+                        query=f"{drug_word} dose frequency route neonatal sepsis {claim[:180]}",
+                        active_guideline=active_guideline,
+                        top_k=6,
+                    )
+                    for c in extra:
+                        if c.chunk_id not in seen_ids:
+                            pool_chunks.append(c)
+                            seen_ids.add(c.chunk_id)
+                except Exception as e:
+                    print(f"[FactCheckResolver] extended retrieval failed for '{drug_word}': {e}")
+
+                note = _resolve_regimen_claim(result, drug_word, active_guideline, pool_chunks)
+                if note:
+                    resolution_log.append(note)
+                    made_progress = True
+                    continue
+
+            note = _resolve_generic_field_claim(result, claim, pool_chunks)
+            if note:
+                resolution_log.append(note)
+                made_progress = True
+                continue
+
+            resolution_log.append(f"could not automatically resolve: \"{claim[:140]}\" — left for clinician review")
+
+        fact_check = _maybe_fact_check_care_plan(
+            result, risk_payload, active_guideline, chunks,
+            deltas=deltas, missed_required_disambiguation=missed_required_disambiguation,
+        )
+        if not made_progress:
+            break  # nothing left this agent knows how to act on -- stop rather than loop uselessly
+
+    if not fact_check.verified:
+        resolution_log.append(
+            f"stopped after {min(iterations_run, _MAX_RESOLUTION_ITERATIONS)} resolution pass(es) — "
+            f"{len(fact_check.flagged_claims)} issue(s) still open, see notes above for clinician review"
+        )
+    elif resolution_log:
+        # Only note "cleared" when something was actually flagged and acted
+        # on — a clean first pass (the common case) leaves resolution_log
+        # empty, matching its docstring in schemas.py.
+        resolution_log.append(f"all flagged claims cleared after {iterations_run} resolution pass(es)")
+    return result, fact_check, resolution_log
+
+
 def generate_care_plan(
     risk_payload: dict[str, Any],
     active_guideline: str,
@@ -986,12 +1798,16 @@ def generate_care_plan(
     deltas: dict | None = None,
     trend_fingerprint: str = "",
     context: Any = None,  # Optional[PatientContext] — see rag/patient_context_builder.py
+    care_setting: str = "hospital",  # "hospital" | "outpatient_no_referral" — see
+                                      # schemas.CarePlanRequest.care_setting and
+                                      # domain/contraindication_rules.check_who_outpatient_exclusions
 ) -> ClinicalCarePlanResponse:
     settings = get_settings()
     previous_assessments = previous_assessments or []
     chunk_responses = [EvidenceChunkResponse(**c.to_dict()) for c in chunks]
     cache_key = _make_care_plan_cache_key(
         risk_payload, active_guideline, len(previous_assessments), trend_fingerprint,
+        care_setting=care_setting,
     )
 
     # -- 1. Cache --
@@ -1015,7 +1831,9 @@ def generate_care_plan(
         method="hybrid" if chunks else "seed",
     )
 
-    prompt = _build_care_plan_prompt(risk_payload, active_guideline, chunks, previous_assessments, context=context)
+    prompt, label_map = _build_care_plan_prompt(
+        risk_payload, active_guideline, chunks, previous_assessments, context=context,
+    )
 
     # -- 2. Try the LLM provider chain (Local -> Gemini -> Groq) --
     try:
@@ -1025,14 +1843,15 @@ def generate_care_plan(
             risk_payload=risk_payload,
             active_guideline=active_guideline,
             deltas=deltas,
+            label_map=label_map,
         )
         result, missed_disambiguation = _apply_deterministic_care_plan_checks(
-            result, risk_payload, chunks, active_guideline, deltas,
+            result, risk_payload, chunks, active_guideline, deltas, care_setting=care_setting,
         )
-        result.fact_check = _maybe_fact_check_care_plan(
-            result, risk_payload, active_guideline, chunks,
-            deltas=deltas,
-            missed_required_disambiguation=missed_disambiguation,
+        # -- 3. Fact-check, then RESOLVE anything it flags (not just report
+        # it) -- see _resolve_flagged_claims's module section header.
+        result, result.fact_check, result.resolution_log = _resolve_flagged_claims(
+            result, risk_payload, active_guideline, chunks, deltas, missed_disambiguation,
         )
         _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
                                 chunks, model_used, is_simulated=False)
@@ -1045,7 +1864,7 @@ def generate_care_plan(
     print("[LLM] All providers unavailable -- using rule-based care plan fallback")
     result = _fallback_care_plan(risk_payload, active_guideline, chunks, previous_assessments)
     result, _ = _apply_deterministic_care_plan_checks(
-        result, risk_payload, chunks, active_guideline, deltas,
+        result, risk_payload, chunks, active_guideline, deltas, care_setting=care_setting,
     )
     result.rag_chunks = chunk_responses
     _write_care_plan_cache(cache_key, risk_payload, active_guideline, result,
@@ -1077,6 +1896,7 @@ def _check_care_plan_cache(cache_key: str) -> ClinicalCarePlanResponse | None:
             CitationItem(
                 source=c.get("source", ""), section=c.get("section", ""),
                 chunk_id=c.get("chunk_id", ""), similarity_score=float(c.get("similarity_score", 0.0)),
+                page_number=c.get("page_number"), file_name=c.get("file_name", ""),
             )
             for c in raw_citations
         ]
@@ -1106,6 +1926,8 @@ def _check_care_plan_cache(cache_key: str) -> ClinicalCarePlanResponse | None:
             disambiguation_block=resp_json.get("disambiguation_block", ""),
             contraindication_flags=resp_json.get("contraindication_flags", []),
             trend_state_change=resp_json.get("trend_state_change", ""),
+            evidence_labels=[EvidenceLabelRef(**r) for r in resp_json.get("evidence_labels", [])],
+            resolution_log=resp_json.get("resolution_log", []),
         )
     except Exception as e:
         print(f"[LLM] Care plan cache check failed (non-fatal): {e}")
@@ -1149,6 +1971,8 @@ def _write_care_plan_cache(
             "disambiguation_block": result.disambiguation_block,
             "contraindication_flags": result.contraindication_flags,
             "trend_state_change": result.trend_state_change,
+            "evidence_labels": [r.model_dump() for r in result.evidence_labels],
+            "resolution_log": result.resolution_log,
         }
         patient = risk_payload.get("patient", {})
         if hasattr(patient, "model_dump"):
@@ -1347,3 +2171,96 @@ def generate_evidence_cards(
         print(f"[LLM] Evidence cards: all providers unavailable ({e})")
 
     return [], False
+
+
+# ── Evidence sections (for /api/v1/evidence/sections) ─────────────────────────
+# One concise summary PER SECTION (not per chunk fragment) — this is what
+# replaces the old per-chunk card summaries whenever the client asks for
+# sections instead. See rag/retrieve.py's assemble_evidence_sections for how
+# a "section" is built (every chunk under the same source heading, not just
+# the ones a given retrieval happened to match).
+
+def generate_evidence_sections(
+    query: str,
+    active_guideline: str,
+    sections: list[dict],
+    patient_context: dict | None = None,
+) -> tuple[dict[int, str], bool]:
+    """
+    Returns ({section_index: summary_text}, generated_by_ai). A section
+    missing from the dict (or an empty dict + generated_by_ai=False) means
+    no LLM provider was available — the client shows the section's raw
+    full_text directly in that case rather than a truncated/regurgitated
+    fallback summary, so returning nothing here is a deliberate, correct
+    outcome, not a partial failure to patch over.
+    """
+    if not sections:
+        return {}, False
+
+    section_list_json = json.dumps([
+        {
+            "index": i,
+            "source": s.get("source_name", s.get("source", "")),
+            "section": s.get("section", ""),
+            # Cap how much of each section's full_text goes into the
+            # prompt -- a section can run to several thousand characters;
+            # the summary only needs enough to be accurate, not the whole
+            # thing repeated back into the LLM call.
+            "content": s.get("full_text", "")[:2500],
+        }
+        for i, s in enumerate(sections)
+    ])
+
+    patient_preamble = _build_patient_context_preamble(patient_context)
+    personalised_instruction = (
+        "Where relevant, note how this applies to the patient in PATIENT CONTEXT above. "
+        if patient_preamble else ""
+    )
+
+    prompt = (
+        f"You are a neonatal sepsis clinical decision support assistant.\n"
+        f"{patient_preamble}"
+        f'Clinician query: "{query}"\n'
+        f"Active guideline: {active_guideline}\n\n"
+        f"GUIDELINE SECTIONS (each is a COMPLETE source section, not a fragment):\n{section_list_json}\n\n"
+        f"For EACH section produce a JSON object:\n"
+        f'- "index": integer matching the section index\n'
+        f'- "summary": 2-4 sentences summarising what THIS section says that answers the '
+        f"query, in clinical language, grounded only in this section's content. "
+        f"{personalised_instruction}\n\n"
+        f"Respond ONLY with a valid JSON array of objects. No markdown, no preamble."
+    )
+
+    def _try_parse_sections(raw: str) -> list[dict]:
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("```", 2)[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.rsplit("```", 1)[0].strip()
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        for key in ("sections", "results", "data", "items"):
+            if key in parsed and isinstance(parsed[key], list):
+                return parsed[key]
+        return []
+
+    try:
+        raw, model_used = call_llm(
+            prompt,
+            system="You are a clinical AI assistant. Respond only with valid JSON.",
+        )
+        parsed = _try_parse_sections(raw)
+        summaries = {
+            int(item["index"]): str(item.get("summary", "")).strip()
+            for item in parsed
+            if "index" in item and str(item.get("summary", "")).strip()
+        }
+        if summaries:
+            print(f"[LLM] Evidence sections generated via {model_used} ({len(summaries)} summaries)")
+            return summaries, True
+    except (LLMUnavailableError, KeyError, ValueError, TypeError) as e:
+        print(f"[LLM] Evidence sections: all providers unavailable or parse failed ({e})")
+
+    return {}, False

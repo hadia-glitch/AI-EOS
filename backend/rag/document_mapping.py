@@ -35,6 +35,15 @@ class DocumentMeta:
     confidence: Confidence = "high"
     matched_by: str = "filename"          # "filename" | "content" | "filename+content" | "fallback"
     mismatch_warning: str = ""            # non-empty if filename and content signals disagreed
+    # "term" | "preterm" | "" -- AAP-only disambiguator. NeoGuard ingests two
+    # separate AAP documents (>=35 weeks "term" management and a <35 weeks
+    # "preterm" companion guideline); both match the same generic AAP
+    # filename/content signals above, so without this they'd collide under
+    # one indistinguishable source_name and retrieval could hand back
+    # preterm-specific dosing/thresholds for a term infant or vice versa.
+    # See _refine_aap_gestational_scope() below. Empty string for every
+    # other source (NICE/WHO/EOSCAL/LOCAL) -- there is nothing to refine.
+    gestational_scope: str = ""
 
 
 # ── Filename signals (fast path, unchanged behaviour when they hit) ────────
@@ -149,6 +158,74 @@ def _who_source_name(sniff_text: str, default: str) -> str:
             return name
     return default
 
+
+# ── AAP term vs. preterm disambiguation ─────────────────────────────────────
+# NeoGuard's guideline set includes two AAP documents: the >=35-weeks
+# ("term") management guideline and a separate <=34 6/7-weeks ("preterm")
+# companion. Both hit the same generic `aap` filename rule and the same
+# "American Academy of Pediatrics" / "AAP" content signals above, so left
+# unrefined they'd both get source_name "AAP EOS Guidelines" -- retrieval
+# and guideline_cache.py's per-category synthesis would then treat them as
+# one interchangeable pool, and a query for a 24-week infant's dosing could
+# surface term-guideline text with no signal that it doesn't apply.
+#
+# BUG FIXED: the original version matched the bare word "preterm" ANYWHERE
+# in ~6000 characters of sniffed content (first ~2 pages). That's the wrong
+# signal -- the >=35-week ("term") guideline's own body text discusses
+# preterm infants extensively for comparison ("The EOS incidence is higher
+# ... among late-preterm infants but still an order of magnitude lower than
+# ... preterm, very low birth weight infants", right in its own
+# epidemiology section, within the first page). That single false-positive
+# body mention was enough to mislabel the TERM document as "preterm" too --
+# both ended up with the same scope regardless of which PDF was actually
+# ingested, and regardless of filename, since content and filename were
+# OR'd together with content dominating whenever it fired.
+#
+# FIX: match the two documents' actual, highly specific TITLE wording
+# instead of a generic keyword -- "<=34 6/7 Weeks' Gestation" vs.
+# ">=35 0/7 Weeks' Gestation" -- and restrict the search to a short
+# title/abstract window (first ~600 sniffed characters) so body text
+# elsewhere in the document can't leak into a title-level scope decision.
+# Filename is checked only as a fallback when the title window gives
+# nothing (e.g. a differently-formatted future AAP document), and even
+# then uses a bare "preterm"/"term" substring ONLY against the filename
+# (short and deliberately named) never against body content again.
+_PRETERM_TITLE_RE = re.compile(r"3\s*4\s*6\s*/\s*7|\u2264\s*3\s*4\s*(?:6\s*/\s*7)?\s*weeks", re.I)
+_TERM_TITLE_RE = re.compile(r"3\s*5\s*0\s*/\s*7|\u2265\s*3\s*5\s*(?:0\s*/\s*7)?\s*weeks", re.I)
+
+
+def _refine_aap_gestational_scope(filename: str, sniff_text: str, meta: DocumentMeta) -> DocumentMeta:
+    if meta.source != "AAP":
+        return meta
+
+    def mark(scope: str) -> DocumentMeta:
+        meta.gestational_scope = scope
+        if scope == "preterm" and "preterm" not in meta.source_name.lower():
+            meta.source_name = meta.source_name.rstrip() + " — Preterm (\u226434 6/7 Weeks' Gestation)"
+        elif scope == "term" and "term" not in meta.source_name.lower() and "35 week" not in meta.source_name.lower():
+            meta.source_name = meta.source_name.rstrip() + " — Term (\u226535 Weeks' Gestation)"
+        return meta
+
+    # Title/abstract window first -- the reliable signal.
+    title_window = (sniff_text or "")[:600]
+    if _PRETERM_TITLE_RE.search(title_window):
+        return mark("preterm")
+    if _TERM_TITLE_RE.search(title_window):
+        return mark("term")
+
+    # Filename fallback -- filename only, never body content again.
+    fname = filename.lower()
+    if "preterm" in fname:
+        return mark("preterm")
+    if "term" in fname:
+        return mark("term")
+
+    # Last resort: default to term (the more common/default AAP document)
+    # rather than leaving scope ambiguous -- but this is now a genuine last
+    # resort, reached only when NEITHER the title window nor the filename
+    # gave any signal at all, not the usual path.
+    return mark("term")
+
 _YEAR_PATTERN = re.compile(r"\b(?:19|20)\d{2}\b")
 
 # UK vs US English spelling gives a weak region tiebreaker ONLY for
@@ -256,7 +333,7 @@ def infer_document_meta(filename: str, sniff_text: str = "") -> DocumentMeta:
 
     if filename_meta is not None:
         if not sniff_text:
-            return filename_meta
+            return _refine_aap_gestational_scope(filename, sniff_text, filename_meta)
 
         if content_best == filename_meta.source or filename_meta.source in content_all:
             filename_meta.confidence = "high"
@@ -270,7 +347,7 @@ def infer_document_meta(filename: str, sniff_text: str = "") -> DocumentMeta:
             if filename_meta.source == "WHO":
                 filename_meta.source_name = _who_source_name(sniff_text, filename_meta.source_name)
 
-            return filename_meta
+            return _refine_aap_gestational_scope(filename, sniff_text, filename_meta)
 
         if content_all and filename_meta.source not in content_all:
             filename_meta.confidence = "medium"
@@ -279,23 +356,23 @@ def infer_document_meta(filename: str, sniff_text: str = "") -> DocumentMeta:
                 f"Filename matched '{filename_meta.source}' but content sniffing found signals for "
                 f"{content_all} and none for '{filename_meta.source}' -- verify this file is correctly named."
             )
-            return filename_meta
+            return _refine_aap_gestational_scope(filename, sniff_text, filename_meta)
 
-        return filename_meta  # no content signals at all either way -- filename match stands, unweakened
+        return _refine_aap_gestational_scope(filename, sniff_text, filename_meta)  # no content signals either way -- filename match stands, unweakened
 
     if content_best is not None:
         year = _extract_year(sniff_text, fallback="unknown")
         source_name = _SOURCE_NAME_TEMPLATE.get(content_best, content_best)
         if content_best == "WHO":
             source_name = _who_source_name(sniff_text, source_name)
-        return DocumentMeta(
+        return _refine_aap_gestational_scope(filename, sniff_text, DocumentMeta(
             source=content_best,
             source_name=source_name,
             version=year,
             region_tag=_region_from_source(content_best, sniff_text),
             confidence="medium",
             matched_by="content",
-        )
+        ))
 
     stem = Path(filename).stem
     return DocumentMeta(

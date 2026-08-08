@@ -316,7 +316,7 @@ class PatientsNotifier extends StateNotifier<List<PatientParameters>> {
 
       await client.from('risk_results').insert({
         'encounter_id': patient.id,
-        'assessment_id': ?assessmentId,
+        'assessment_id': assessmentId,
         'layer1_score': result.layer1Score,
         'layer2_score': result.layer2Score,
         'layer3_score': result.layer3Score,

@@ -1,10 +1,11 @@
 """NeoGuard AI FastAPI backend — RAG + Gemini explanation + evidence AI engine."""
 
 from __future__ import annotations
-
+import traceback
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import traceback
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -16,7 +17,7 @@ from rag.guideline_cache import rebuild_all as rebuild_guideline_cache
 from rag.guideline_cache import get_sync_payload as get_guideline_cache_sync_payload
 from rag.ingest import ingest_directory
 from rag.patient_context_builder import build_patient_context
-from rag.retrieve import get_chunk_store, get_rag_health, retrieve_evidence
+from rag.retrieve import assemble_evidence_sections, get_chunk_store, get_rag_health, retrieve_evidence
 from schemas import (
     CarePlanRequest,
     ClinicalCarePlanResponse,
@@ -35,6 +36,7 @@ from services.gemini_service import (
     generate_care_plan,
     generate_evidence_overview,
     generate_evidence_cards,
+    generate_evidence_sections,
 )
 
 
@@ -68,6 +70,42 @@ class EvidenceOverviewResponse(BaseModel):
 
 class EvidenceCardsResponse(BaseModel):
     cards: list[EvidenceCardItem]
+    generated_by_ai: bool
+
+
+class EvidenceSectionChunk(BaseModel):
+    chunk_id: str
+    chunk_text: str
+    page_number: int | None = None
+    # True when this specific chunk was part of the retrieval that matched
+    # the clinician's query — lets the UI highlight exactly which sentences
+    # within the full section actually answered the search, rather than the
+    # whole section reading as uniformly "found."
+    highlighted: bool = False
+
+
+class EvidenceSectionItem(BaseModel):
+    source: str
+    source_name: str
+    section: str
+    file_name: str = ""
+    page_number: int | None = None
+    region_tag: str = ""
+    version: str = ""
+    similarity_score: float = 0.0
+    chunks: list[EvidenceSectionChunk]
+    full_text: str
+    # True if this section had more member chunks than the response cap —
+    # the UI should say so rather than silently showing a partial section.
+    truncated: bool = False
+    # Concise AI-generated summary of the section (empty when no LLM
+    # provider was available — the UI shows the full_text directly instead
+    # of a truncated/regurgitated fallback in that case, never both).
+    ai_summary: str = ""
+
+
+class EvidenceSectionsResponse(BaseModel):
+    sections: list[EvidenceSectionItem]
     generated_by_ai: bool
 
 
@@ -155,6 +193,9 @@ async def lifespan(app: FastAPI):
         print(f"[Startup] Loaded {count} evidence chunks from Supabase")
     except Exception as e:
         print(f"[Startup] Supabase unavailable, using seed fallback: {e}")
+    
+        traceback.print_exc()   # <-- prints the full traceback
+        raise       
     yield
 
 
@@ -292,9 +333,13 @@ def evidence_overview(body: EvidenceAiRequest):
         )
         chunks_dicts = [c.to_dict() for c in raw_chunks]
 
-    if not settings.gemini_api_key:
-        return EvidenceOverviewResponse(overview="", generated_by_ai=False)
-
+    # NOTE: previously gated on `if settings.gemini_api_key:` alone, which
+    # skipped generation entirely whenever only Local LLM or Groq was
+    # configured (no Gemini key) — even though generate_evidence_overview
+    # already calls through llm_provider.call_llm()'s full Local->Gemini->
+    # Groq chain and correctly returns ("", False) via its own
+    # LLMUnavailableError handling when NOTHING is available. Always
+    # attempt; let the function's own fallback logic decide.
     overview, generated = generate_evidence_overview(
         body.query, body.active_guideline, chunks_dicts, patient_context=body.patient_context,
     )
@@ -326,10 +371,11 @@ def evidence_cards(body: EvidenceAiRequest):
     ai_cards = []
     generated_by_ai = False
 
-    if settings.gemini_api_key:
-        ai_cards, generated_by_ai = generate_evidence_cards(
-            body.query, body.active_guideline, chunks_dicts, patient_context=body.patient_context,
-        )
+    # See evidence_overview's note above -- always attempt; generate_evidence_cards
+    # already handles "no provider available" correctly via call_llm's chain.
+    ai_cards, generated_by_ai = generate_evidence_cards(
+        body.query, body.active_guideline, chunks_dicts, patient_context=body.patient_context,
+    )
 
     if not ai_cards:
         ai_cards = _fallback_cards(chunks_dicts)
@@ -352,7 +398,57 @@ def evidence_cards(body: EvidenceAiRequest):
     return EvidenceCardsResponse(cards=cards, generated_by_ai=generated_by_ai)
 
 
-# ── Encounter endpoints ───────────────────────────────────────────────────────
+# ── Evidence AI: sections (replaces per-chunk cards with full, legible source
+# sections — see rag/retrieve.py's assemble_evidence_sections for why) ────────
+
+@app.post("/api/v1/evidence/sections", response_model=EvidenceSectionsResponse)
+def evidence_sections(body: EvidenceAiRequest):
+    """
+    Groups retrieved chunks into their complete source section (every chunk
+    under the same document heading, not just the ones this query happened
+    to retrieve) and generates ONE concise AI summary per section instead of
+    per fragment. Falls back to no summary (never a truncated chunk
+    regurgitation) when no LLM provider is available — the client shows the
+    full section text directly in that case.
+    """
+    chunks_dicts = body.chunks
+
+    if not chunks_dicts:
+        raw_chunks = retrieve_evidence(
+            query=body.query,
+            active_guideline=body.active_guideline,
+            top_k=12,
+        )
+        chunks_dicts = [c.to_dict() for c in raw_chunks]
+
+    sections_data = assemble_evidence_sections(chunks_dicts)
+
+    ai_summaries: dict[int, str] = {}
+    generated_by_ai = False
+    if sections_data:
+        ai_summaries, generated_by_ai = generate_evidence_sections(
+            body.query, body.active_guideline, sections_data, patient_context=body.patient_context,
+        )
+
+    sections = []
+    for i, s in enumerate(sections_data):
+        sections.append(EvidenceSectionItem(
+            source=s.get("source", ""),
+            source_name=s.get("source_name", ""),
+            section=s.get("section", ""),
+            file_name=s.get("file_name", ""),
+            page_number=s.get("page_number"),
+            region_tag=s.get("region_tag", ""),
+            version=s.get("version", ""),
+            similarity_score=s.get("similarity_score", 0.0),
+            chunks=[EvidenceSectionChunk(**c) for c in s.get("chunks", [])],
+            full_text=s.get("full_text", ""),
+            truncated=s.get("truncated", False),
+            ai_summary=ai_summaries.get(i, ""),
+        ))
+
+    return EvidenceSectionsResponse(sections=sections, generated_by_ai=generated_by_ai)
+
 
 @app.post("/api/v1/encounters/{encounter_id}/evidence", response_model=list[EvidenceChunkResponse])
 def encounter_evidence(encounter_id: str, body: EncounterEvidenceRequest):
@@ -512,6 +608,7 @@ def encounter_care_plan(encounter_id: str, body: CarePlanRequest):
             deltas=latest_delta,
             trend_fingerprint=_trend_fingerprint(latest_delta),
             context=context,
+            care_setting=body.care_setting,
         )
     except Exception as e:
         print(f"[API] generate_care_plan failed unexpectedly: {e}")

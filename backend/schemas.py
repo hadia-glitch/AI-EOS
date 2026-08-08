@@ -59,6 +59,17 @@ class PatientSnapshot(BaseModel):
     it_ratio: float | None = None
     platelet_count: float | None = None
     pct_level: float | None = None
+    # Forward-compatible additions -- NOT yet populated by any current UI
+    # flow (see new_patient_screen.dart's _birthWeight, which is captured
+    # in local widget state but never actually passed into PatientParameters
+    # today -- a pre-existing gap, unrelated to this change) or by
+    # deidentify.dart's DeidentifiedPatient. Present here so
+    # rag/query_builder.py's low-birth-weight query terms and
+    # domain.contraindication_rules.check_who_outpatient_exclusions have
+    # somewhere real to read from once that plumbing is added; both
+    # currently see None for every request and are no-ops.
+    birth_weight_g: float | None = None
+    hospitalized_within_prior_14_days: bool | None = None
 
 
 class RiskPayload(BaseModel):
@@ -85,6 +96,39 @@ class CitationItem(BaseModel):
     section: str
     chunk_id: str
     similarity_score: float
+    # Added so a citation can be resolved to an exact PDF location (see
+    # GuidelinePdfViewerScreen, which already accepts pageNumber+searchText
+    # for chunk-level jump-to-source — citations previously had nothing to
+    # give it). Optional/default-empty so this is additive: any existing
+    # caller building a CitationItem without these still works.
+    page_number: int | None = None
+    file_name: str = ""
+
+
+class EvidenceLabelRef(BaseModel):
+    """
+    One retrieved chunk, addressable by a short inline label (e.g. "E1")
+    instead of its raw UUID. Every [E#] a clinician sees in prose anywhere
+    in a response (driver_breakdown, fact_check.flagged_claims, any
+    [DETERMINISTIC.../FROM RETRIEVED EVIDENCE] correction note) resolves to
+    exactly one of these -- see rag/fact_check.label_evidence_chunks, the
+    single place that assigns E1/E2/... so the numbering is identical
+    everywhere it's used within one response. The client renders each [E#]
+    as a tappable/hoverable citation chip using this data rather than the
+    old behaviour of the LLM printing a raw chunk_id UUID directly into
+    prose (see driver_breakdown's old failure mode).
+    """
+    label: str
+    chunk_id: str
+    source: str
+    source_name: str
+    section: str
+    # Trimmed excerpt of the chunk's actual text (not the full chunk) --
+    # enough for a clinician to verify the citation without re-fetching
+    # anything; see gemini_service._build_evidence_label_refs for the cap.
+    snippet: str = ""
+    page_number: int | None = None
+    file_name: str = ""
 
 
 class FactCheckResult(BaseModel):
@@ -115,6 +159,12 @@ class ExplanationResponse(BaseModel):
     generated_offline: bool = False
     fallback_used: bool = False
     fact_check: FactCheckResult = Field(default_factory=FactCheckResult)
+    # Label -> chunk lookup for every [E#] citation that may appear in this
+    # response's free-text fields or in fact_check.flagged_claims. See
+    # EvidenceLabelRef. Empty for rule-based/cached-legacy responses that
+    # predate this field -- the client treats a missing/absent label as
+    # plain text, never a broken-looking citation chip.
+    evidence_labels: list[EvidenceLabelRef] = Field(default_factory=list)
 
 
 class AntibioticPlanSchema(BaseModel):
@@ -135,6 +185,12 @@ class CarePlanRequest(BaseModel):
     # trend_narrative — the trend chip shown in the UI is computed
     # deterministically on the Flutter side from the same data, never by the LLM.
     previous_assessments: list[dict[str, Any]] = Field(default_factory=list)
+    # "hospital" (default) | "outpatient_no_referral". Gates
+    # domain.contraindication_rules.check_who_outpatient_exclusions (WHO PSBI
+    # birth-weight/recent-hospitalization exclusions) -- a no-op at
+    # "hospital", which is every existing caller until the app actually
+    # exposes an outpatient-triage entry point in the UI.
+    care_setting: str = "hospital"
 
 
 class ClinicalCarePlanResponse(BaseModel):
@@ -158,6 +214,20 @@ class ClinicalCarePlanResponse(BaseModel):
     disambiguation_block: str = ""
     contraindication_flags: list[str] = Field(default_factory=list)
     trend_state_change: str = ""
+    # Same label scheme as ExplanationResponse.evidence_labels -- see
+    # EvidenceLabelRef's docstring.
+    evidence_labels: list[EvidenceLabelRef] = Field(default_factory=list)
+    # Transparency trail for the Phase-3 fact-check RESOLUTION agent (see
+    # gemini_service._resolve_flagged_claims): one line per action taken
+    # while trying to clear every claim the judge flagged, in order --
+    # "grounded X from wider retrieval", "no corpus support for X --
+    # applied [DETERMINISTIC DEFAULT]", or "could not auto-resolve: ...".
+    # Empty when fact-check didn't run (see FactCheckResult.performed) or
+    # ran clean with nothing to resolve. This is deliberately visible to
+    # the clinician, not just a server log -- a plan that was silently
+    # "fixed" without any trace of what changed is worse than one that
+    # still shows an open flag.
+    resolution_log: list[str] = Field(default_factory=list)
 
 
 class RagHealthResponse(BaseModel):

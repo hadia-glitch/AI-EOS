@@ -4,6 +4,7 @@ import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/eoscal_calculator.dart';
 import 'guidelines_data.dart';
+import 'models/rag_chunk.dart' show CitationItem, EvidenceLabelRef;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data models
@@ -55,7 +56,7 @@ class StructuredExplanation {
   final AntibioticPlan antibioticPlan;
   final String monitoringPlan;
   final String escalationCriteria;
-  final List<String> guidelineCitations;
+  final List<CitationItem> guidelineCitations;
   /// True = rule-based deterministic output, NOT AI-generated.
   /// The UI must display this clearly — never label rule-based output as "AI".
   final bool isSimulated;
@@ -63,6 +64,10 @@ class StructuredExplanation {
   final String sourceLabel;
   /// Result of the backend fact-checking judge (HIGH/CRITICAL only).
   final FactCheckInfo factCheck;
+  /// Label -> chunk lookup for every `[E#]` citation that may appear in
+  /// this explanation's free-text fields or in factCheck.flaggedClaims.
+  /// See EvidenceCitationText, which renders them as hover/tap chips.
+  final List<EvidenceLabelRef> evidenceLabels;
 
   const StructuredExplanation({
     required this.clinicalSummary,
@@ -76,7 +81,13 @@ class StructuredExplanation {
     this.isSimulated = false,
     this.sourceLabel = '',
     this.factCheck = const FactCheckInfo(),
+    this.evidenceLabels = const [],
   });
+
+  /// [evidenceLabels] keyed by label ("E1" -> ref) for O(1) lookup while
+  /// rendering — see EvidenceCitationText.
+  Map<String, EvidenceLabelRef> get evidenceLabelMap =>
+      {for (final e in evidenceLabels) e.label: e};
 }
 
 class AntibioticPlan {
@@ -124,7 +135,7 @@ class ClinicalCarePlan {
   final AntibioticPlan antibioticPlan;
   final String monitoringPlan;
   final String escalationCriteria;
-  final List<String> guidelineCitations;
+  final List<CitationItem> guidelineCitations;
   final bool isSimulated;
   final String sourceLabel;
   final FactCheckInfo factCheck;
@@ -133,6 +144,15 @@ class ClinicalCarePlan {
   final String disambiguationBlock;
   final List<String> contraindicationFlags;
   final String trendStateChange;
+  /// Label -> chunk lookup for every `[E#]` citation that may appear in
+  /// this plan's free-text fields, resolution notes, or
+  /// factCheck.flaggedClaims. See EvidenceCitationText.
+  final List<EvidenceLabelRef> evidenceLabels;
+  /// Transparency trail from the backend's fact-check RESOLUTION agent
+  /// (see gemini_service.py's _resolve_flagged_claims): one line per
+  /// action taken while trying to clear every claim the judge flagged.
+  /// Empty when fact-check didn't run or found nothing to resolve.
+  final List<String> resolutionLog;
 
   const ClinicalCarePlan({
     required this.clinicalSummary,
@@ -152,12 +172,19 @@ class ClinicalCarePlan {
     this.disambiguationBlock = '',
     this.contraindicationFlags = const [],
     this.trendStateChange = '',
+    this.evidenceLabels = const [],
+    this.resolutionLog = const [],
   });
 
   bool get hasSafetyFlags =>
       disambiguationBlock.isNotEmpty ||
       contraindicationFlags.isNotEmpty ||
       trendStateChange.isNotEmpty;
+
+  /// [evidenceLabels] keyed by label ("E1" -> ref) for O(1) lookup while
+  /// rendering — see EvidenceCitationText.
+  Map<String, EvidenceLabelRef> get evidenceLabelMap =>
+      {for (final e in evidenceLabels) e.label: e};
 }
 
 class EvidenceCardResult {
@@ -513,9 +540,15 @@ class GeminiService {
     }
 
     final citations = chunks
-        .map((c) =>
-            '${c.source} — ${c.section}'
-            '${c.documentUrl.isNotEmpty ? ': ${c.documentUrl}' : ''}')
+        .map((c) => CitationItem(
+              source: c.source,
+              section: c.section,
+              chunkId: c.id,
+              similarityScore: 0.5,
+              documentUrl: c.documentUrl,
+              pageNumber: c.pageNumber,
+              fileName: c.fileName,
+            ))
         .toList();
 
     final driverNames = drivers.map((d) => d.name).join(', ');

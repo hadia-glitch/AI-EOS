@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/evidence_citation.dart';
 import '../../core/widgets/fact_check_badge.dart';
 import '../../data/api/explanation_api.dart';
 import '../../data/auth_service.dart';
@@ -14,6 +15,7 @@ import '../../data/supabase_config.dart';
 import '../../domain/eoscal_calculator.dart';
 import '../../domain/offline_care_plan_builder.dart';
 import '../../domain/trend_calculator.dart';
+import 'guideline_pdf_viewer_screen.dart';
 
 /// Screen 15 (v2) — Clinical Care Plan
 ///
@@ -115,6 +117,7 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
         result: widget.result,
         activeGuideline: widget.activeGuideline,
         previousAssessments: _previousAssessments,
+        careSetting: widget.patient.careSetting,
       );
     } on BackendUnreachableException {
       // Health check itself failed — genuinely offline. Try the locally-
@@ -424,7 +427,11 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
       children: [
         const SizedBox(height: 10),
         _SourceBanner(plan: plan),
-        FactCheckBadge(factCheck: plan.factCheck),
+        FactCheckBadge(
+          factCheck: plan.factCheck,
+          resolutionLog: plan.resolutionLog,
+          evidenceLabels: plan.evidenceLabelMap,
+        ),
         if (plan.hasSafetyFlags) _SafetyFlagsBanner(plan: plan),
         const SizedBox(height: 12),
 
@@ -439,14 +446,16 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
               _TrendChip(trend: _trend, count: _previousAssessments.length),
               const SizedBox(height: 12),
             ],
-            Text(
-              plan.clinicalSummary,
+            EvidenceCitationText(
+              text: plan.clinicalSummary,
+              labels: plan.evidenceLabelMap,
               style: const TextStyle(fontSize: 14, height: 1.7),
             ),
             if (plan.trendNarrative.isNotEmpty) ...[
               const SizedBox(height: 10),
-              Text(
-                plan.trendNarrative,
+              EvidenceCitationText(
+                text: plan.trendNarrative,
+                labels: plan.evidenceLabelMap,
                 style: TextStyle(
                   fontSize: 13,
                   height: 1.6,
@@ -469,8 +478,9 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             icon: Icons.analytics_outlined,
             accentColor: const Color(0xFF7C3AED),
             children: [
-              Text(
-                plan.riskAnalysis,
+              EvidenceCitationText(
+                text: plan.riskAnalysis,
+                labels: plan.evidenceLabelMap,
                 style: const TextStyle(fontSize: 14, height: 1.7),
               ),
             ],
@@ -506,8 +516,9 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             icon: Icons.local_drink_outlined,
             accentColor: const Color(0xFF0891B2),
             children: [
-              Text(
-                plan.nutritionFluidPlan,
+              EvidenceCitationText(
+                text: plan.nutritionFluidPlan,
+                labels: plan.evidenceLabelMap,
                 style: const TextStyle(fontSize: 14, height: 1.7),
               ),
             ],
@@ -520,8 +531,9 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             icon: Icons.family_restroom_outlined,
             accentColor: const Color(0xFF9333EA),
             children: [
-              Text(
-                plan.parentCommunicationNotes,
+              EvidenceCitationText(
+                text: plan.parentCommunicationNotes,
+                labels: plan.evidenceLabelMap,
                 style: const TextStyle(fontSize: 14, height: 1.7),
               ),
             ],
@@ -532,8 +544,9 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
         if (plan.monitoringPlan.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
-            child: Text(
-              plan.monitoringPlan,
+            child: EvidenceCitationText(
+              text: plan.monitoringPlan,
+              labels: plan.evidenceLabelMap,
               style: TextStyle(
                 fontSize: 13,
                 height: 1.6,
@@ -547,8 +560,9 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
         if (plan.escalationCriteria.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
-            child: Text(
-              plan.escalationCriteria,
+            child: EvidenceCitationText(
+              text: plan.escalationCriteria,
+              labels: plan.evidenceLabelMap,
               style: TextStyle(
                 fontSize: 13,
                 height: 1.6,
@@ -565,8 +579,9 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             icon: Icons.radar,
             accentColor: const Color(0xFFD97706),
             children: [
-              Text(
-                plan.driverBreakdown,
+              EvidenceCitationText(
+                text: plan.driverBreakdown,
+                labels: plan.evidenceLabelMap,
                 style: const TextStyle(fontSize: 14, height: 1.7),
               ),
             ],
@@ -581,7 +596,7 @@ class _CarePlanScreenState extends ConsumerState<CarePlanScreen> {
             accentColor: Colors.grey.shade600,
             children: [
               ...plan.guidelineCitations.asMap().entries.map(
-                (e) => _CitationRow(index: e.key + 1, text: e.value),
+                (e) => _CitationRow(index: e.key + 1, citation: e.value),
               ),
             ],
           ),
@@ -701,8 +716,9 @@ class _SafetyFlagsBanner extends StatelessWidget {
           ...items.map(
             (t) => Padding(
               padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                t,
+              child: EvidenceCitationText(
+                text: t,
+                labels: plan.evidenceLabelMap,
                 style: TextStyle(fontSize: 12, height: 1.4, color: WhoTheme.riskCritical),
               ),
             ),
@@ -934,17 +950,22 @@ class _ActionItem extends StatelessWidget {
 
 class _CitationRow extends StatelessWidget {
   final int index;
-  final String text;
-  const _CitationRow({required this.index, required this.text});
+  final CitationItem citation;
+  const _CitationRow({required this.index, required this.citation});
 
-  String? _extractUrl(String t) {
-    final m = RegExp(r'https?://\S+').firstMatch(t);
-    return m?.group(0);
+  /// "PDF name — Section" instead of an opaque chunk id — matches how the
+  /// backend already labels citations (source_name + section), just
+  /// rendered from the structured fields directly instead of a
+  /// pre-flattened string.
+  String get _label {
+    final source = citation.source.trim();
+    final section = citation.section.trim();
+    if (source.isNotEmpty && section.isNotEmpty) return '$source — $section';
+    return source.isNotEmpty ? source : (section.isNotEmpty ? section : 'Guideline source');
   }
 
   @override
   Widget build(BuildContext context) {
-    final url = _extractUrl(text);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
@@ -964,14 +985,50 @@ class _CitationRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  url != null ? text.replaceAll(url, '').trim() : text,
+                  _label,
                   style: const TextStyle(fontSize: 13, height: 1.5),
                 ),
-                if (url != null)
+                if (citation.canOpenInApp)
+                  GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => GuidelinePdfViewerScreen(
+                          fileName: citation.fileName,
+                          documentName: citation.source.isNotEmpty
+                              ? citation.source
+                              : citation.fileName,
+                          pageNumber: citation.pageNumber,
+                          searchText: citation.section,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          citation.pageNumber != null
+                              ? 'Open in PDF · p.${citation.pageNumber}'
+                              : 'Open in PDF',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF1A56DB),
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        const Icon(
+                          Icons.picture_as_pdf_outlined,
+                          size: 12,
+                          color: Color(0xFF1A56DB),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (citation.documentUrl.isNotEmpty)
                   GestureDetector(
                     onTap: () async {
                       await launchUrl(
-                        Uri.parse(url),
+                        Uri.parse(citation.documentUrl),
                         mode: LaunchMode.externalApplication,
                       );
                     },
@@ -980,7 +1037,7 @@ class _CitationRow extends StatelessWidget {
                       children: [
                         Flexible(
                           child: Text(
-                            url,
+                            citation.documentUrl,
                             style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF1A56DB),
@@ -1005,7 +1062,7 @@ class _CitationRow extends StatelessWidget {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: text));
+              Clipboard.setData(ClipboardData(text: _label));
               ScaffoldMessenger.of(
                 context,
               ).showSnackBar(const SnackBar(content: Text('Citation copied')));

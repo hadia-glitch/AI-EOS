@@ -154,3 +154,80 @@ def check_contraindications(
 
 def flags_to_strings(flags: list[ContraindicationFlag]) -> list[str]:
     return [f"[{f.severity}] {f.drug}: {f.reason}" for f in flags]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WHO PSBI outpatient-eligibility exclusions — ported from the offline eval
+# harness (RESOLVED there as a previously-undetected divergence: this
+# module originally only encoded two rules, gentamicin/KDIGO nephrotoxicity
+# and penicillin allergy, but the golden vignette set also tests a WHO PSBI
+# outpatient-eligibility rule the shipped code never implemented).
+#
+# WHO's "Recommendations for management of serious bacterial infections in
+# infants aged 0-59 days" outpatient regimens (oral amoxicillin / IM
+# gentamicin+amoxicillin, given when hospital referral isn't feasible) do
+# NOT apply to every infant with a qualifying sign pattern — birth weight
+# <1500g or hospitalization for illness in the prior 14 days are explicit
+# exclusions requiring hospitalization regardless of presenting signs or
+# referral accessibility.
+#
+# NOTE (disclosed gap, not silently assumed away): this only fires when
+# called with care_setting="outpatient_no_referral" — a no-op otherwise.
+# NeoGuard's current data model (schemas.CarePlanRequest /
+# DeidentifiedPatient in deidentify.dart) has no `care_setting` or
+# `birth_weight_g`/`hospitalized_within_prior_14_days` fields yet, so this
+# function is not wired into any call site in gemini_service.py by this
+# change — wiring it up requires adding those fields end-to-end (schema,
+# Flutter patient model, care-setting selector in the UI), which is outside
+# the scope of "make retrieval/generation match the harness." Left here,
+# tested and ready, rather than adding a fake default that would give false
+# confidence that outpatient triage safety is covered when it isn't yet.
+# The remaining 15 of 20 golden-set contraindication vignettes (confirmed
+# Gram-negative organism, NICE's gentamicin-interval exceptions, maternal
+# beta-lactam allergy, major congenital malformation precluding oral
+# dosing, unexplained bleeding/thrombocytopenia) are likewise NOT encoded
+# as deterministic code anywhere in this codebase — report that honestly
+# rather than implying full coverage of the stratum.
+# ─────────────────────────────────────────────────────────────────────────
+
+_WHO_LBW_EXCLUSION_G = 1500
+_WHO_RECENT_HOSPITALIZATION_DAYS = 14
+
+
+def check_who_outpatient_exclusions(
+    patient_snapshot: dict,
+    care_setting: str = "hospital",
+) -> list[ContraindicationFlag]:
+    """
+    care_setting must be "outpatient_no_referral" for this to fire at all —
+    a no-op for hospital-based care (NeoGuard's only currently-supported
+    setting; see module-level note above).
+    """
+    if care_setting != "outpatient_no_referral":
+        return []
+    flags: list[ContraindicationFlag] = []
+    birth_weight = patient_snapshot.get("birth_weight_g")
+    if birth_weight is not None and float(birth_weight) < _WHO_LBW_EXCLUSION_G:
+        flags.append(ContraindicationFlag(
+            drug="WHO outpatient PSBI regimen (oral amoxicillin / IM gentamicin+amoxicillin)",
+            reason=(
+                f"Birth weight {birth_weight}g is under WHO's explicit "
+                f"{_WHO_LBW_EXCLUSION_G}g exclusion threshold for outpatient PSBI "
+                "regimens — this infant must be hospitalized regardless of the "
+                "presenting sign pattern or referral accessibility."
+            ),
+            severity="CRITICAL",
+        ))
+    recent_hosp = patient_snapshot.get("hospitalized_within_prior_14_days")
+    if recent_hosp is True:
+        flags.append(ContraindicationFlag(
+            drug="WHO outpatient PSBI regimen (oral amoxicillin / IM gentamicin+amoxicillin)",
+            reason=(
+                f"Infant was hospitalized for illness within the prior "
+                f"{_WHO_RECENT_HOSPITALIZATION_DAYS} days — WHO's outpatient "
+                "regimens explicitly do not apply; this infant must be "
+                "hospitalized for the current illness."
+            ),
+            severity="CRITICAL",
+        ))
+    return flags

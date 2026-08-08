@@ -54,6 +54,18 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
   bool _bloodCulturePositive = false;
   bool _penicillinAllergy = false;
 
+  // Not editable in this flow (set on the patient-creation screen — see
+  // new_patient_screen.dart) but MUST be carried forward here rather than
+  // dropped: _buildCurrentPatientParameters() below reconstructs a brand
+  // new PatientParameters on every save, including every follow-up
+  // reassessment via PatientEntryFlow(existingPatient: patient) from
+  // RiskResultsScreen/PatientDetailScreen — without capturing these into
+  // local state and writing them back out, the very first "Add Update"
+  // on an existing patient would silently erase their birth weight and
+  // care setting, the same drop-on-reconstruction bug this fix closes.
+  double? _birthWeightGrams;
+  String _careSetting = 'hospital';
+
   @override
   void initState() {
     super.initState();
@@ -93,6 +105,8 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
         _creatinineController.text = p.creatinineMgDl!.toString();
       }
       _penicillinAllergy = p.penicillinAllergy ?? false;
+      _birthWeightGrams = p.birthWeightGrams;
+      _careSetting = p.careSetting;
     }
   }
 
@@ -151,6 +165,8 @@ class _PatientEntryFlowState extends ConsumerState<PatientEntryFlow> {
       urineOutputMlKgHr: double.tryParse(_urineOutputController.text),
       creatinineMgDl: double.tryParse(_creatinineController.text),
       penicillinAllergy: _penicillinAllergy,
+      birthWeightGrams: _birthWeightGrams,
+      careSetting: _careSetting,
     );
   }
 

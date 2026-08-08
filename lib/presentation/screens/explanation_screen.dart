@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme.dart';
+import '../../core/widgets/evidence_citation.dart';
 import '../../core/widgets/offline_banner.dart';
 import '../../core/widgets/fact_check_badge.dart';
 import '../../core/widgets/source_badge.dart';
@@ -14,6 +15,7 @@ import '../../data/guidelines_data.dart';
 import '../../data/models/rag_chunk.dart';
 import '../../data/supabase_config.dart';
 import '../../domain/eoscal_calculator.dart';
+import 'guideline_pdf_viewer_screen.dart';
 
 /// Screen 15 — Clinical Explanation
 ///
@@ -228,7 +230,10 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
 
         // ── Source banner — ALWAYS honest about what generated this ──────────
         _SourceBanner(exp: exp),
-        FactCheckBadge(factCheck: exp.factCheck),
+        FactCheckBadge(
+          factCheck: exp.factCheck,
+          evidenceLabels: exp.evidenceLabelMap,
+        ),
 
         const SizedBox(height: 12),
 
@@ -238,8 +243,11 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
           icon: Icons.summarize_outlined,
           accentColor: const Color(0xFF1A56DB),
           children: [
-            Text(exp.clinicalSummary,
-                style: const TextStyle(fontSize: 14, height: 1.7)),
+            EvidenceCitationText(
+              text: exp.clinicalSummary,
+              labels: exp.evidenceLabelMap,
+              style: const TextStyle(fontSize: 14, height: 1.7),
+            ),
             if (!exp.isSimulated) ...[
               const SizedBox(height: 12),
               _AiDisclaimerChip(),
@@ -254,8 +262,11 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
             icon: Icons.analytics_outlined,
             accentColor: const Color(0xFF7C3AED),
             children: [
-              Text(exp.riskAnalysis,
-                  style: const TextStyle(fontSize: 14, height: 1.7)),
+              EvidenceCitationText(
+                text: exp.riskAnalysis,
+                labels: exp.evidenceLabelMap,
+                style: const TextStyle(fontSize: 14, height: 1.7),
+              ),
             ],
           ),
 
@@ -266,8 +277,11 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
             icon: Icons.radar,
             accentColor: const Color(0xFFD97706),
             children: [
-              Text(exp.driverBreakdown,
-                  style: const TextStyle(fontSize: 14, height: 1.7)),
+              EvidenceCitationText(
+                text: exp.driverBreakdown,
+                labels: exp.evidenceLabelMap,
+                style: const TextStyle(fontSize: 14, height: 1.7),
+              ),
             ],
           ),
 
@@ -294,8 +308,11 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
             icon: Icons.monitor_heart_outlined,
             accentColor: const Color(0xFF0891B2),
             children: [
-              Text(exp.monitoringPlan,
-                  style: const TextStyle(fontSize: 14, height: 1.7)),
+              EvidenceCitationText(
+                text: exp.monitoringPlan,
+                labels: exp.evidenceLabelMap,
+                style: const TextStyle(fontSize: 14, height: 1.7),
+              ),
             ],
           ),
 
@@ -313,8 +330,11 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.red.shade200),
                 ),
-                child: Text(exp.escalationCriteria,
-                    style: const TextStyle(fontSize: 14, height: 1.7)),
+                child: EvidenceCitationText(
+                  text: exp.escalationCriteria,
+                  labels: exp.evidenceLabelMap,
+                  style: const TextStyle(fontSize: 14, height: 1.7),
+                ),
               ),
             ],
           ),
@@ -327,7 +347,7 @@ class _ExplanationScreenState extends ConsumerState<ExplanationScreen> {
             accentColor: Colors.grey.shade600,
             children: [
               ...exp.guidelineCitations.asMap().entries.map(
-                    (e) => _CitationRow(index: e.key + 1, text: e.value),
+                    (e) => _CitationRow(index: e.key + 1, citation: e.value),
                   ),
             ],
           ),
@@ -630,17 +650,18 @@ class _ActionItem extends StatelessWidget {
 
 class _CitationRow extends StatelessWidget {
   final int index;
-  final String text;
-  const _CitationRow({required this.index, required this.text});
+  final CitationItem citation;
+  const _CitationRow({required this.index, required this.citation});
 
-  String? _extractUrl(String t) {
-    final m = RegExp(r'https?://\S+').firstMatch(t);
-    return m?.group(0);
+  String get _label {
+    final source = citation.source.trim();
+    final section = citation.section.trim();
+    if (source.isNotEmpty && section.isNotEmpty) return '$source — $section';
+    return source.isNotEmpty ? source : (section.isNotEmpty ? section : 'Guideline source');
   }
 
   @override
   Widget build(BuildContext context) {
-    final url = _extractUrl(text);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
@@ -657,20 +678,51 @@ class _CitationRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  url != null ? text.replaceAll(url, '').trim() : text,
+                  _label,
                   style: const TextStyle(fontSize: 13, height: 1.5),
                 ),
-                if (url != null)
+                if (citation.canOpenInApp)
+                  GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => GuidelinePdfViewerScreen(
+                          fileName: citation.fileName,
+                          documentName: citation.source.isNotEmpty
+                              ? citation.source
+                              : citation.fileName,
+                          pageNumber: citation.pageNumber,
+                          searchText: citation.section,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          citation.pageNumber != null
+                              ? 'Open in PDF · p.${citation.pageNumber}'
+                              : 'Open in PDF',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF1A56DB)),
+                        ),
+                        const SizedBox(width: 3),
+                        const Icon(Icons.picture_as_pdf_outlined,
+                            size: 12, color: Color(0xFF1A56DB)),
+                      ],
+                    ),
+                  )
+                else if (citation.documentUrl.isNotEmpty)
                   GestureDetector(
                     onTap: () async {
-                      await launchUrl(Uri.parse(url),
+                      await launchUrl(Uri.parse(citation.documentUrl),
                           mode: LaunchMode.externalApplication);
                     },
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Flexible(
-                          child: Text(url,
+                          child: Text(citation.documentUrl,
                               style: const TextStyle(
                                   fontSize: 12, color: Color(0xFF1A56DB)),
                               overflow: TextOverflow.ellipsis),
@@ -689,7 +741,7 @@ class _CitationRow extends StatelessWidget {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: text));
+              Clipboard.setData(ClipboardData(text: _label));
               ScaffoldMessenger.of(context)
                   .showSnackBar(const SnackBar(content: Text('Citation copied')));
             },

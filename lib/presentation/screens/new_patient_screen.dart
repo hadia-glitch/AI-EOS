@@ -36,6 +36,16 @@ class _NewPatientScreenState extends State<NewPatientScreen> {
   int _gaDays = 0;
   int _birthWeight = 3200;
 
+  // "hospital" (default) | "outpatient_no_referral". Threaded through to
+  // ExplanationApi.generateCarePlan's careSetting param, which gates the
+  // backend's WHO PSBI outpatient-eligibility exclusions (birth weight
+  // <1500g / hospitalized in the prior 14 days must still be hospitalized
+  // regardless of presenting signs) -- see
+  // domain/contraindication_rules.check_who_outpatient_exclusions. Set once
+  // here at patient creation since it describes the care CONTEXT for this
+  // encounter, not a clinical finding that changes between reassessments.
+  String _careSetting = 'hospital';
+
   double get _gaTotal => _gaWeeks + _gaDays / 7.0;
 
   @override
@@ -137,6 +147,49 @@ class _NewPatientScreenState extends State<NewPatientScreen> {
                     onChanged: (v) =>
                         _birthWeight = int.tryParse(v) ?? _birthWeight,
                   ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Care Setting',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Hospital'),
+                        selected: _careSetting == 'hospital',
+                        onSelected: (_) =>
+                            setState(() => _careSetting = 'hospital'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('Outpatient — no referral possible'),
+                        selected: _careSetting == 'outpatient_no_referral',
+                        onSelected: (_) => setState(
+                          () => _careSetting = 'outpatient_no_referral',
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_careSetting == 'outpatient_no_referral')
+                    Container(
+                      margin: const EdgeInsets.only(top: 12),
+                      padding: const EdgeInsets.all(12),
+                      color: WhoTheme.riskIntermediate.withValues(alpha: 0.2),
+                      child: const Text(
+                        'WHO PSBI outpatient regimens do not apply to infants under '
+                        '1500g birth weight or hospitalized for illness in the prior '
+                        '14 days — care plans will flag hospitalization as required '
+                        'for those cases regardless of presenting signs.',
+                      ),
+                    ),
                   if (_gaTotal < 35)
                     Container(
                       margin: const EdgeInsets.only(top: 12),
@@ -171,6 +224,8 @@ class _NewPatientScreenState extends State<NewPatientScreen> {
                 poorPerfusion: false,
                 neonatalTemperature: 36.8,
                 neurologicalStatus: 'Normal',
+                birthWeightGrams: _birthWeight.toDouble(),
+                careSetting: _careSetting,
               );
               Navigator.pushReplacement(
                 context,

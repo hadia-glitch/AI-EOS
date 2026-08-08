@@ -70,6 +70,25 @@ class PatientParameters {
   final double? creatinineMgDl;
   final bool? penicillinAllergy;
 
+  // Added so birth weight, captured on the patient-creation screen, is
+  // actually retained instead of being dropped -- previously
+  // new_patient_screen.dart captured it into local widget state
+  // (_birthWeight) but never passed it into PatientParameters at all, so it
+  // never reached deidentify.dart/the backend's PatientSnapshot.birth_weight_g,
+  // which check_who_outpatient_exclusions and query_builder.py's low-birth-
+  // weight query terms both depend on.
+  final double? birthWeightGrams;
+
+  // "hospital" (default) | "outpatient_no_referral". Set on the
+  // patient-creation screen; threaded through to
+  // ExplanationApi.generateCarePlan's careSetting parameter, which gates the
+  // backend's WHO PSBI outpatient-eligibility exclusions (birth weight
+  // <1500g / hospitalized in the prior 14 days -- see
+  // domain/contraindication_rules.check_who_outpatient_exclusions). Not sent
+  // as part of the de-identified risk payload (deidentify.dart) since it's a
+  // care-context flag, not a patient clinical field.
+  final String careSetting;
+
   PatientParameters({
     required this.id,
     required this.name,
@@ -97,6 +116,8 @@ class PatientParameters {
     this.urineOutputMlKgHr,
     this.creatinineMgDl,
     this.penicillinAllergy,
+    this.birthWeightGrams,
+    this.careSetting = 'hospital',
   });
 
   // CopyWith helper
@@ -127,6 +148,8 @@ class PatientParameters {
     double? urineOutputMlKgHr,
     double? creatinineMgDl,
     bool? penicillinAllergy,
+    double? birthWeightGrams,
+    String? careSetting,
   }) {
     return PatientParameters(
       id: id ?? this.id,
@@ -155,6 +178,8 @@ class PatientParameters {
       urineOutputMlKgHr: urineOutputMlKgHr ?? this.urineOutputMlKgHr,
       creatinineMgDl: creatinineMgDl ?? this.creatinineMgDl,
       penicillinAllergy: penicillinAllergy ?? this.penicillinAllergy,
+      birthWeightGrams: birthWeightGrams ?? this.birthWeightGrams,
+      careSetting: careSetting ?? this.careSetting,
     );
   }
 }

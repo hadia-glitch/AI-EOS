@@ -98,10 +98,24 @@ class ExplanationApi {
     final rawCitations = data['citation_list'] as List<dynamic>? ?? [];
     final citations = rawCitations.map((c) {
       final m = c as Map<String, dynamic>;
-      final source = m['source'] as String? ?? '';
-      final section = m['section'] as String? ?? '';
-      final url = CitationItem.resolveDocumentUrl(source);
-      return '$source — $section${url.isNotEmpty ? ': $url' : ''}';
+      final item = CitationItem.fromJson(m);
+      // Backend may not always resolve document_url (e.g. a LOCAL-source
+      // guideline it doesn't have a hardcoded public URL for); fall back to
+      // the same lookup the citation string used to rely on so an external
+      // link is still available whenever fileName/pageNumber (in-app jump)
+      // isn't.
+      if (item.documentUrl.isEmpty) {
+        return CitationItem(
+          source: item.source,
+          section: item.section,
+          chunkId: item.chunkId,
+          similarityScore: item.similarityScore,
+          documentUrl: CitationItem.resolveDocumentUrl(item.source),
+          pageNumber: item.pageNumber,
+          fileName: item.fileName,
+        );
+      }
+      return item;
     }).toList();
 
     final perDriverList = data['per_driver_explanations'] as List<dynamic>? ?? [];
@@ -124,6 +138,7 @@ class ExplanationApi {
       isSimulated: isSimulated,
       sourceLabel: sourceLabel,
       factCheck: FactCheckInfo.fromJson(data['fact_check'] as Map<String, dynamic>?),
+      evidenceLabels: _parseEvidenceLabels(data['evidence_labels']),
     );
   }
 
@@ -137,6 +152,15 @@ class ExplanationApi {
     required EoscalResult result,
     required String activeGuideline,
     List<Map<String, dynamic>> previousAssessments = const [],
+    // 'hospital' (default, matches every existing call site's behavior) |
+    // 'outpatient_no_referral'. Gates the backend's WHO PSBI birth-weight /
+    // recent-hospitalization outpatient-eligibility exclusions (see
+    // backend/domain/contraindication_rules.check_who_outpatient_exclusions).
+    // NeoGuard has no outpatient-triage screen yet, so nothing in this app
+    // currently passes anything other than the default -- this parameter
+    // exists so that entry point can call this API correctly once it's
+    // built, without another round of backend/API changes.
+    String careSetting = 'hospital',
   }) async {
     final id = encounterId.isNotEmpty ? encounterId : patient.id;
     final available = await _client.isBackendAvailable();
@@ -161,6 +185,7 @@ class ExplanationApi {
           'risk_result': payload,
           'active_guideline': activeGuideline,
           'previous_assessments': previousAssessments,
+          'care_setting': careSetting,
         },
       );
 
@@ -206,10 +231,24 @@ class ExplanationApi {
     final rawCitations = data['citation_list'] as List<dynamic>? ?? [];
     final citations = rawCitations.map((c) {
       final m = c as Map<String, dynamic>;
-      final source = m['source'] as String? ?? '';
-      final section = m['section'] as String? ?? '';
-      final url = CitationItem.resolveDocumentUrl(source);
-      return '$source — $section${url.isNotEmpty ? ': $url' : ''}';
+      final item = CitationItem.fromJson(m);
+      // Backend may not always resolve document_url (e.g. a LOCAL-source
+      // guideline it doesn't have a hardcoded public URL for); fall back to
+      // the same lookup the citation string used to rely on so an external
+      // link is still available whenever fileName/pageNumber (in-app jump)
+      // isn't.
+      if (item.documentUrl.isEmpty) {
+        return CitationItem(
+          source: item.source,
+          section: item.section,
+          chunkId: item.chunkId,
+          similarityScore: item.similarityScore,
+          documentUrl: CitationItem.resolveDocumentUrl(item.source),
+          pageNumber: item.pageNumber,
+          fileName: item.fileName,
+        );
+      }
+      return item;
     }).toList();
 
     final abx = data['antibiotic_plan'] as Map<String, dynamic>? ?? {};
@@ -235,7 +274,19 @@ class ExplanationApi {
           .map((e) => e.toString())
           .toList(),
       trendStateChange: data['trend_state_change'] as String? ?? '',
+      evidenceLabels: _parseEvidenceLabels(data['evidence_labels']),
+      resolutionLog: (data['resolution_log'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList(),
     );
+  }
+
+  /// Shared parser for the `evidence_labels` field on both the explanation
+  /// and care-plan backend responses — see EvidenceLabelRef.
+  List<EvidenceLabelRef> _parseEvidenceLabels(dynamic raw) {
+    return (raw as List<dynamic>? ?? [])
+        .map((e) => EvidenceLabelRef.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   AntibioticPlan _deriveAntibioticPlan(List<String> actions) {

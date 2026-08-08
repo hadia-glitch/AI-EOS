@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import '../../data/connectivity_service.dart';
 import '../../data/offline_pdf_cache.dart';
 
 /// Screen 08 — Guideline PDF Viewer.
@@ -78,12 +79,27 @@ class _GuidelinePdfViewerScreenState extends State<GuidelinePdfViewerScreen> {
     if (!mounted) return;
 
     if (path == null) {
+      // getLocalPath() failing doesn't necessarily mean "no connection" —
+      // it also fails when the device IS online but the backend/Storage is
+      // unreachable, or this file genuinely has no matching entry in
+      // guideline_documents (see OfflinePdfCache.getLocalPath's docstring
+      // and its developer.log line for the exact reason, visible in
+      // debug logs). Check real connectivity here instead of assuming, so
+      // a clinician who's actually online sees an accurate message and
+      // knows retrying blindly won't help.
+      final online = await ConnectivityService.instance.isOnline();
       setState(() {
         _loading = false;
-        _error = alreadyCached
-            ? 'Could not open this document.'
-            : 'This guideline hasn\'t been downloaded to this device yet, and there\'s no '
-                'connection right now. Open it once while online to enable offline viewing.';
+        if (alreadyCached) {
+          _error = 'Could not open this document.';
+        } else if (!online) {
+          _error = 'This guideline hasn\'t been downloaded to this device yet, and there\'s no '
+              'connection right now. Open it once while online to enable offline viewing.';
+        } else {
+          _error = 'This guideline couldn\'t be downloaded. The app is online, but the source '
+              'couldn\'t be reached or this document isn\'t available yet — tap Try again, or '
+              'check with your administrator if this keeps happening.';
+        }
       });
       return;
     }

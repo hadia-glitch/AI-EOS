@@ -85,7 +85,7 @@ class EvidenceApi {
                     'chunk_text': c.chunkText,
                   })
               .toList(),
-          'patient_context': ?patientContext,
+          if (patientContext != null) 'patient_context': patientContext,
         },
       );
       final data = response.data as Map<String, dynamic>;
@@ -124,7 +124,7 @@ class EvidenceApi {
                     'chunk_text': c.chunkText,
                   })
               .toList(),
-          'patient_context': ?patientContext,
+          if (patientContext != null) 'patient_context': patientContext,
         },
       );
 
@@ -153,6 +153,74 @@ class EvidenceApi {
       developer.log('[EvidenceApi] fetchEvidenceCards failed',
           name: 'EvidenceApi', error: e, stackTrace: st);
       return _fallbackCards(chunks);
+    }
+  }
+
+  // ── Evidence AI sections (replaces per-chunk cards with full, legible ────
+  // source sections — see backend rag/retrieve.py's assemble_evidence_sections) ──
+
+  /// Returns (sections, generatedByAi). An empty section list with
+  /// generatedByAi=false and no exception means the backend/search itself
+  /// returned nothing usable — the caller should fall back to whatever
+  /// empty-state UI it already shows for [chunks]. generatedByAi=false with
+  /// a NON-empty section list means sections were assembled but no LLM
+  /// summarized them — the UI should show each section's raw fullText
+  /// directly rather than any AI-summary placeholder.
+  Future<({List<EvidenceSection> sections, bool generatedByAi})> fetchEvidenceSections({
+    required String query,
+    required String activeGuideline,
+    required List<RagChunk> chunks,
+    Map<String, dynamic>? patientContext,
+  }) async {
+    final backendAvailable = await _client.isBackendAvailable();
+    if (!backendAvailable) {
+      return (sections: <EvidenceSection>[], generatedByAi: false);
+    }
+
+    try {
+      final response = await _client.dio.post(
+        '/api/v1/evidence/sections',
+        data: {
+          'query': query,
+          'active_guideline': activeGuideline,
+          // Full chunk shape (including chunk_id/page_number/file_name) --
+          // unlike fetchEvidenceOverview/fetchEvidenceCards above, sections
+          // assembly needs chunk_id to know which specific chunks within a
+          // reconstructed section were the ones actually matched, so it can
+          // highlight them; a partial chunk shape would silently make every
+          // chunk in a section un-highlighted.
+          'chunks': chunks
+              .map((c) => {
+                    'chunk_id': c.chunkId,
+                    'source': c.source,
+                    'source_name': c.sourceName,
+                    'section': c.section,
+                    'chunk_text': c.chunkText,
+                    'similarity_score': c.similarityScore,
+                    'region_tag': c.regionTag,
+                    'version': c.version,
+                    'chunk_index': c.chunkIndex,
+                    'page_number': c.pageNumber,
+                    'file_name': c.fileName,
+                  })
+              .toList(),
+          if (patientContext != null) 'patient_context': patientContext,
+        },
+      );
+
+      final data = response.data as Map<String, dynamic>;
+      final rawSections = data['sections'] as List<dynamic>? ?? [];
+      final generatedByAi = data['generated_by_ai'] as bool? ?? false;
+      return (
+        sections: rawSections
+            .map((s) => EvidenceSection.fromJson(s as Map<String, dynamic>))
+            .toList(),
+        generatedByAi: generatedByAi,
+      );
+    } on Exception catch (e, st) {
+      developer.log('[EvidenceApi] fetchEvidenceSections failed',
+          name: 'EvidenceApi', error: e, stackTrace: st);
+      return (sections: <EvidenceSection>[], generatedByAi: false);
     }
   }
 

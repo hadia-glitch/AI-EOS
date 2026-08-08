@@ -30,7 +30,7 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
   final _filters = <String>{};
 
   List<RagChunk> _rawChunks = [];
-  List<EvidenceCardResult> _cards = [];
+  List<EvidenceSection> _sections = [];
   String _overview = '';
 
   bool _loadingSearch = false;
@@ -67,7 +67,7 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
       _loadingSearch = true;
       _loadingAi = false;
       _rawChunks = [];
-      _cards = [];
+      _sections = [];
       _overview = '';
       _aiUnavailable = false;
     });
@@ -117,7 +117,7 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
     );
     if (!mounted) return;
 
-    final cards = await evidenceApi.fetchEvidenceCards(
+    final cardsResult = await evidenceApi.fetchEvidenceSections(
       query: query,
       activeGuideline: guideline,
       chunks: chunks,
@@ -125,15 +125,14 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
     );
     if (!mounted) return;
 
-    // Detect whether Gemini was actually used
-    // (If overview is empty AND cards match raw chunk count with no headlines
-    //  that differ from section names, Gemini was not available)
-    final geminiUsed = overview.isNotEmpty;
-
     setState(() {
       _overview = overview;
-      _cards = cards;
-      _aiUnavailable = !geminiUsed;
+      _sections = cardsResult.sections;
+      // Sections carries its own accurate generatedByAi flag from the
+      // backend (was previously inferred from whether the SEPARATE overview
+      // call happened to succeed, which could disagree with whether cards
+      // themselves were AI-generated).
+      _aiUnavailable = !cardsResult.generatedByAi;
       _loadingAi = false;
     });
   }
@@ -193,14 +192,14 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
     }
   }
 
-  void _openCard(EvidenceCardResult card) {
+  void _openSection(EvidenceSection section) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => _CardDetailSheet(card: card),
+      builder: (_) => _SectionDetailSheet(section: section),
     );
   }
 
@@ -259,7 +258,7 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
                         _lastQuery = null;
                         setState(() {
                           _rawChunks = [];
-                          _cards = [];
+                          _sections = [];
                           _overview = '';
                         });
                       },
@@ -402,7 +401,9 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
               runSpacing: 6,
               children: [
                 Text(
-                  '${_cards.isNotEmpty ? _cards.length : _rawChunks.length} results',
+                  _sections.isNotEmpty
+                      ? '${_sections.length} section${_sections.length == 1 ? '' : 's'}'
+                      : '${_rawChunks.length} results',
                   style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                 ),
                 if (_aiUnavailable)
@@ -459,12 +460,15 @@ class _EvidenceSearchScreenState extends ConsumerState<EvidenceSearchScreen> {
           ),
         ],
 
-        // ── Evidence cards ────────────────────────────────────────────────
+        // ── Evidence sections ────────────────────────────────────────────
         if (_loadingAi)
           ..._buildCardSkeletons()
-        else if (_cards.isNotEmpty)
-          ..._cards.map(
-            (card) => _EvidenceCard(card: card, onTap: () => _openCard(card)),
+        else if (_sections.isNotEmpty)
+          ..._sections.map(
+            (section) => _SectionCard(
+              section: section,
+              onTap: () => _openSection(section),
+            ),
           )
         else
           ..._rawChunks.map((chunk) => _RawChunkCard(chunk: chunk)),
@@ -798,15 +802,16 @@ class _AiOverviewSkeleton extends StatelessWidget {
 // Evidence card (AI-processed or rule-based)
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _EvidenceCard extends StatelessWidget {
-  final EvidenceCardResult card;
+class _SectionCard extends StatelessWidget {
+  final EvidenceSection section;
   final VoidCallback onTap;
 
-  const _EvidenceCard({required this.card, required this.onTap});
+  const _SectionCard({required this.section, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final docUrl = card.chunk.documentUrl;
+    final hasAiSummary = section.aiSummary.trim().isNotEmpty;
+    final highlightedCount = section.chunks.where((c) => c.highlighted).length;
 
     return InkWell(
       onTap: onTap,
@@ -831,78 +836,71 @@ class _EvidenceCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                SourceBadge(source: card.chunk.source),
+                SourceBadge(source: section.source),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    card.chunk.section,
+                    section.section,
                     style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (section.chunks.length > 1)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '$highlightedCount/${section.chunks.length}',
+                      style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 8),
+            // AI summary when available; otherwise a concise preview of the
+            // REAL section text (still capped to a few lines for a scannable
+            // card — the full, un-truncated text lives in the detail sheet).
+            // No AI ⇒ no separate "raw chunk" fallback widget, no maxLines:3
+            // chunk-fragment regurgitation — the card always shows a
+            // legible piece of the actual reconstructed section.
             Text(
-              card.headline,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                height: 1.4,
-                color: Color(0xFF1A1A2E),
+              hasAiSummary ? section.aiSummary : section.fullText,
+              maxLines: hasAiSummary ? 4 : 3,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: hasAiSummary ? 14 : 13,
+                fontWeight: hasAiSummary ? FontWeight.w500 : FontWeight.normal,
+                height: 1.45,
+                color: hasAiSummary ? const Color(0xFF1A1A2E) : Colors.grey.shade700,
               ),
             ),
             const SizedBox(height: 8),
-            if (docUrl.isNotEmpty)
-              GestureDetector(
-                onTap: () async {
-                  await launchUrl(
-                    Uri.parse(docUrl),
-                    mode: LaunchMode.externalApplication,
-                  );
-                },
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        _citationLabel(card.chunk),
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF1A56DB),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 3),
-                    const Icon(
-                      Icons.arrow_outward,
-                      size: 13,
-                      color: Color(0xFF1A56DB),
-                    ),
-                  ],
+            Row(
+              children: [
+                Icon(Icons.description_outlined, size: 12, color: Colors.grey.shade500),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    section.pageNumber != null
+                        ? '${section.sourceName} · p.${section.pageNumber}'
+                        : section.sourceName,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              )
-            else
-              Text(
-                _citationLabel(card.chunk),
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-              ),
+                Text(
+                  'View section →',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+                ),
+              ],
+            ),
           ],
         ),
       ),
     );
-  }
-
-  String _citationLabel(GuidelineChunk c) {
-    final url = c.documentUrl;
-    if (url.isEmpty) return '${c.source} — ${c.section}';
-    try {
-      final uri = Uri.parse(url);
-      return '${c.source} — ${c.section} · ${uri.host}${uri.path}';
-    } catch (_) {
-      return '${c.source} — ${c.section}';
-    }
   }
 }
 
@@ -991,18 +989,19 @@ class _RawChunkCard extends StatelessWidget {
 // Card detail bottom sheet
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _CardDetailSheet extends StatelessWidget {
-  final EvidenceCardResult card;
-  const _CardDetailSheet({required this.card});
+class _SectionDetailSheet extends StatelessWidget {
+  final EvidenceSection section;
+  const _SectionDetailSheet({required this.section});
 
   @override
   Widget build(BuildContext context) {
-    final docUrl = card.chunk.documentUrl;
+    final docUrl = CitationItem.resolveDocumentUrl(section.sourceName);
+    final hasAiSummary = section.aiSummary.trim().isNotEmpty;
 
     return DraggableScrollableSheet(
       expand: false,
-      initialChildSize: 0.65,
-      maxChildSize: 0.93,
+      initialChildSize: 0.75,
+      maxChildSize: 0.95,
       builder: (_, scroll) => Padding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
         child: ListView(
@@ -1022,11 +1021,11 @@ class _CardDetailSheet extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SourceBadge(source: card.chunk.source),
+                SourceBadge(source: section.source),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    card.chunk.section,
+                    section.section,
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 15,
@@ -1035,149 +1034,130 @@ class _CardDetailSheet extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Text(
-              card.headline,
-              style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                height: 1.4,
-                color: Color(0xFF1A1A2E),
-              ),
-            ),
             const SizedBox(height: 4),
-            if (docUrl.isNotEmpty)
-              GestureDetector(
-                onTap: () async {
-                  await launchUrl(
-                    Uri.parse(docUrl),
-                    mode: LaunchMode.externalApplication,
-                  );
-                },
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        docUrl,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF1A56DB),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 3),
-                    const Icon(
-                      Icons.arrow_outward,
-                      size: 13,
-                      color: Color(0xFF1A56DB),
-                    ),
-                  ],
-                ),
-              ),
-            const Divider(height: 28),
-
-            // AI-processed answer
-            _sectionLabel(context, Icons.auto_awesome, 'AI Analysis'),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFEEF4FF),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFBFD3FF)),
-              ),
-              child: Text(
-                card.processedAnswer,
-                style: const TextStyle(fontSize: 14, height: 1.65),
-              ),
+            Text(
+              section.pageNumber != null
+                  ? '${section.sourceName} · page ${section.pageNumber}'
+                  : section.sourceName,
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
             ),
+            const SizedBox(height: 12),
 
-            if (card.exactExcerpt.isNotEmpty) ...[
-              const SizedBox(height: 20),
-              _sectionLabel(
-                context,
-                Icons.format_quote,
-                'Exact excerpt from source',
+            // AI summary — ONLY shown when one was actually generated. No
+            // LLM available ⇒ this whole block is simply absent, never
+            // replaced by a raw/regurgitated placeholder.
+            if (hasAiSummary) ...[
+              Row(
+                children: [
+                  Icon(Icons.auto_awesome, size: 16, color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    'AI Summary',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
-              InkWell(
-                borderRadius: BorderRadius.circular(10),
-                onTap: card.chunk.fileName.isNotEmpty
-                    ? () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => GuidelinePdfViewerScreen(
-                              fileName: card.chunk.fileName,
-                              documentName: card.chunk.source.isNotEmpty
-                                  ? '${card.chunk.source} — ${card.chunk.section}'
-                                  : card.chunk.section,
-                              pageNumber: card.chunk.pageNumber,
-                              searchText: card.exactExcerpt,
-                            ),
-                          ),
-                        );
-                      }
-                    : null,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border(
-                      left: BorderSide(
-                        color: Theme.of(context).colorScheme.primary,
-                        width: 4,
-                      ),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '"${card.exactExcerpt}"',
-                        style: TextStyle(
-                          fontSize: 13,
-                          height: 1.6,
-                          fontStyle: FontStyle.italic,
-                          color: Colors.grey.shade800,
-                        ),
-                      ),
-                      if (card.chunk.fileName.isNotEmpty) ...[
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.picture_as_pdf_outlined,
-                              size: 14,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              card.chunk.pageNumber != null
-                                  ? 'View in source PDF · page ${card.chunk.pageNumber}'
-                                  : 'View in source PDF',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
-                  ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF4FF),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFBFD3FF)),
+                ),
+                // No maxLines/ellipsis here — the whole sheet already
+                // scrolls (ListView above), so the summary is fully
+                // readable without truncation while staying concise
+                // because the prompt itself asks for 2-4 sentences.
+                child: Text(
+                  section.aiSummary,
+                  style: const TextStyle(fontSize: 14, height: 1.65),
                 ),
               ),
-              const SizedBox(height: 6),
-              Text(
-                '— ${card.chunk.source}, ${card.chunk.section}',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-              ),
+              const SizedBox(height: 20),
             ],
+
+            Row(
+              children: [
+                Icon(Icons.article_outlined, size: 16, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 6),
+                Text(
+                  'Full Section',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '${section.chunks.where((c) => c.highlighted).length}/${section.chunks.length} matched',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              // Every chunk that actually matched the search is highlighted
+              // within the full, legible section — the surrounding
+              // non-highlighted chunks give real context instead of the
+              // matched sentence sitting alone with no idea what it's part
+              // of.
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final chunk in section.chunks)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: chunk.highlighted
+                          ? const EdgeInsets.symmetric(horizontal: 8, vertical: 6)
+                          : EdgeInsets.zero,
+                      decoration: chunk.highlighted
+                          ? BoxDecoration(
+                              color: const Color(0xFFFFF4CC),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFFF0DA8C)),
+                            )
+                          : null,
+                      child: Text(
+                        chunk.chunkText,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          height: 1.6,
+                          color: Colors.grey.shade800,
+                          fontWeight: chunk.highlighted ? FontWeight.w500 : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                  if (section.truncated)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'This section continues beyond what\'s shown here — open the '
+                        'full guideline PDF for the rest.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.grey.shade500,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
 
             const SizedBox(height: 20),
             Row(
@@ -1185,8 +1165,8 @@ class _CardDetailSheet extends StatelessWidget {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: () {
-                      final citation =
-                          '${card.chunk.source} — ${card.chunk.section}. $docUrl';
+                      final citation = '${section.sourceName} — ${section.section}.'
+                          '${docUrl.isNotEmpty ? ' $docUrl' : ''}';
                       Clipboard.setData(ClipboardData(text: citation));
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('Citation copied')),
@@ -1196,8 +1176,32 @@ class _CardDetailSheet extends StatelessWidget {
                     label: const Text('Copy citation'),
                   ),
                 ),
-                if (docUrl.isNotEmpty) ...[
-                  const SizedBox(width: 10),
+                const SizedBox(width: 10),
+                if (section.canOpenInApp)
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => GuidelinePdfViewerScreen(
+                              fileName: section.fileName,
+                              documentName: section.sourceName,
+                              pageNumber: section.pageNumber,
+                              searchText: section.section,
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
+                      label: Text(
+                        section.pageNumber != null
+                            ? 'View section · p.${section.pageNumber}'
+                            : 'View section in PDF',
+                      ),
+                    ),
+                  )
+                else if (docUrl.isNotEmpty)
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () async {
@@ -1210,29 +1214,11 @@ class _CardDetailSheet extends StatelessWidget {
                       label: const Text('Open guideline'),
                     ),
                   ),
-                ],
               ],
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _sectionLabel(BuildContext context, IconData icon, String label) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 13,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-        ),
-      ],
     );
   }
 }
