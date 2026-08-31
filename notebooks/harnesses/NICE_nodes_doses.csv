@@ -1,0 +1,5 @@
+id,drug,ga_band,pna_band,weight_band,dose_amount,unit,frequency,route,max_dose
+NICE_DOSE_001,Benzylpenicillin,,<72h (early-onset),,25,mg/kg,12-hourly (consider 8-hourly if very unwell),IV,
+NICE_DOSE_002,Gentamicin,,<72h (early-onset),,5,mg/kg,"starting dose, every 36 hours (off-label evidence-based interval)",IV,
+NICE_DOSE_003,Benzylpenicillin,,,,50,mg/kg,"12-hourly, normally >=14 days (GBS meningitis)",IV,
+NICE_DOSE_004,Gentamicin,,,,5,mg/kg,"starting dose, every 36 hours, 5 days total (GBS meningitis)",IV,

@@ -1,0 +1,81 @@
+from_id,relationship,to_id,notes
+WHO,RECOMMENDS,WHO_REC_001,
+WHO,RECOMMENDS,WHO_REC_002,
+WHO,RECOMMENDS,WHO_REC_003,
+WHO,RECOMMENDS,WHO_REC_004,
+WHO,RECOMMENDS,WHO_REC_005,
+WHO,RECOMMENDS,WHO_REC_006,
+WHO,RECOMMENDS,WHO_REC_007,
+WHO,RECOMMENDS,WHO_REC_008,
+WHO,RECOMMENDS,WHO_REC_009,
+WHO,RECOMMENDS,WHO_REC_010,
+WHO,RECOMMENDS,WHO_REC_011,
+WHO,RECOMMENDS,WHO_REC_012,
+WHO,RECOMMENDS,WHO_REC_013,
+WHO_REC_001,SUPPORTED_BY,WHO_S01,page 18
+WHO_REC_002,SUPPORTED_BY,WHO_S02,page 22
+WHO_REC_003,SUPPORTED_BY,WHO_S02_b,page 22
+WHO_REC_003,PRESCRIBES,WHO_DOSE_001,ampicillin 0-7d band
+WHO_REC_003,PRESCRIBES,WHO_DOSE_002,ampicillin >7d band
+WHO_REC_003,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration >=10 days
+WHO_REC_003,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration >=10 days
+WHO_REC_004,SUPPORTED_BY,WHO_S03,page 25 (regimen 4)
+WHO_REC_004,PRESCRIBES,WHO_DOSE_005,amoxicillin 0-7d band
+WHO_REC_004,PRESCRIBES,WHO_DOSE_006,amoxicillin >7d band
+WHO_REC_004,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration >=7 days
+WHO_REC_004,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration >=7 days
+WHO_REC_005,SUPPORTED_BY,WHO_S03_b,page 25 (regimen 3
+WHO_REC_005,PRESCRIBES,WHO_DOSE_005,amoxicillin 0-7d band
+WHO_REC_005,PRESCRIBES,WHO_DOSE_006,amoxicillin >7d band
+WHO_REC_005,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration 2 days only
+WHO_REC_005,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration 2 days only
+WHO_REC_006,SUPPORTED_BY,WHO_S04,page 31
+WHO_REC_006,PRESCRIBES,WHO_DOSE_005,amoxicillin 0-7d band (population is 0-6 days)
+WHO_REC_007,SUPPORTED_BY,WHO_S05,page 35
+WHO_REC_007,PRESCRIBES,WHO_DOSE_006,amoxicillin >7d band (population is 7-59 days)
+WHO_REC_008,SUPPORTED_BY,WHO_S06,page 40
+WHO_REC_009,SUPPORTED_BY,WHO_S07,page 43
+WHO_REC_009,PRESCRIBES,WHO_DOSE_001,ampicillin 0-7d band
+WHO_REC_009,PRESCRIBES,WHO_DOSE_002,ampicillin >7d band
+WHO_REC_009,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration >=10 days
+WHO_REC_009,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration >=10 days
+Ampicillin,TREATS,SuspectedSepsis,per WHO_REC_009
+Gentamicin,TREATS,SuspectedSepsis,per WHO_REC_009
+WHO_REC_010,SUPPORTED_BY,WHO_S08,page 47
+WHO_REC_010,PRESCRIBES,WHO_DOSE_007,cloxacillin 0-7d band
+WHO_REC_010,PRESCRIBES,WHO_DOSE_008,cloxacillin >7d band
+WHO_REC_010,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration >=10 days
+WHO_REC_010,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration >=10 days
+WHO_REC_011,SUPPORTED_BY,WHO_S09,page 50
+WHO_REC_011,PRESCRIBES,WHO_DOSE_001,ampicillin 0-7d band (option)
+WHO_REC_011,PRESCRIBES,WHO_DOSE_002,ampicillin >7d band (option)
+WHO_REC_011,PRESCRIBES,WHO_DOSE_009,cefotaxime 0-7d band (option)
+WHO_REC_011,PRESCRIBES,WHO_DOSE_010,cefotaxime >7d band (option)
+WHO_REC_011,PRESCRIBES,WHO_DOSE_011,ceftriaxone (option; drug name unmapped in Section 0 - see unmapped entities)
+WHO_REC_011,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration >=3 weeks
+WHO_REC_011,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration >=3 weeks
+Ampicillin,TREATS,Meningitis,per WHO_REC_011
+Cefotaxime,TREATS,Meningitis,per WHO_REC_011
+Gentamicin,TREATS,Meningitis,per WHO_REC_011
+Ampicillin,ACTIVE_AGAINST,ListeriaMonocytogenes,"added as triple therapy specifically for Listeria coverage, per WHO_REC_011"
+WHO_REC_012,SUPPORTED_BY,WHO_S10,page 53
+WHO_REC_012,PRESCRIBES,WHO_DOSE_001,ampicillin 0-7d band
+WHO_REC_012,PRESCRIBES,WHO_DOSE_002,ampicillin >7d band
+WHO_REC_012,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration >=7 days
+WHO_REC_012,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration >=7 days
+WHO_REC_013,SUPPORTED_BY,WHO_S11,page 56
+WHO_REC_013,PRESCRIBES,WHO_DOSE_007,cloxacillin 0-7d band
+WHO_REC_013,PRESCRIBES,WHO_DOSE_008,cloxacillin >7d band
+WHO_REC_013,PRESCRIBES,WHO_DOSE_003,gentamicin 0-7d band; total duration >=7 days
+WHO_REC_013,PRESCRIBES,WHO_DOSE_004,gentamicin >7d band; total duration >=7 days
+Ampicillin,HAS_DOSE,WHO_DOSE_001,
+Ampicillin,HAS_DOSE,WHO_DOSE_002,
+Gentamicin,HAS_DOSE,WHO_DOSE_003,
+Gentamicin,HAS_DOSE,WHO_DOSE_004,
+Amoxicillin,HAS_DOSE,WHO_DOSE_005,
+Amoxicillin,HAS_DOSE,WHO_DOSE_006,
+Cloxacillin,HAS_DOSE,WHO_DOSE_007,
+Cloxacillin,HAS_DOSE,WHO_DOSE_008,
+Cefotaxime,HAS_DOSE,WHO_DOSE_009,
+Cefotaxime,HAS_DOSE,WHO_DOSE_010,
+Ceftriaxone,HAS_DOSE,WHO_DOSE_011,

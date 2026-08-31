@@ -1,0 +1,916 @@
+{
+  "guideline_id": "NICE",
+  "source_meta": {
+    "title": "NICE NG195: Neonatal infection - antibiotics for prevention and treatment",
+    "org": "National Institute for Health and Care Excellence",
+    "year": "2026",
+    "region": "UK"
+  },
+  "sections": [
+    {
+      "section_id": "NICE_S01",
+      "section_type": "WhenToStartAntibiotics",
+      "guideline_native_number": "1.6.1",
+      "page_start": 15,
+      "page_end": 15,
+      "summary": "Defines who should be offered antibiotics during labour to prevent early-onset infection: people in pre-term labour; those with GBS colonization, bacteriuria or infection in the current pregnancy; those with GBS colonization/bacteriuria/infection in a previous pregnancy who lack a negative enrichment culture/PCR rectovaginal swab result in the current pregnancy; those with a previous baby with invasive GBS disease; and those with a clinical diagnosis of chorioamnionitis.",
+      "entities_mentioned": {
+        "conditions": [
+          "Chorioamnionitis",
+          "EarlyOnsetSepsis"
+        ],
+        "risk_factors": [
+          "MaternalGBSColonization",
+          "PreviousInfantGBSDisease",
+          "ClinicalChorioamnionitis",
+          "Prematurity"
+        ],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": [
+          "GroupBStreptococcus"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S02",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "1.6.2 (Table 1)",
+      "page_start": 15,
+      "page_end": 16,
+      "summary": "For intrapartum prophylaxis in people with no penicillin allergy, recommends IV benzylpenicillin alone if chorioamnionitis is absent; if chorioamnionitis is present, recommends benzylpenicillin combined with gentamicin and metronidazole to cover a broader range of causative organisms.",
+      "entities_mentioned": {
+        "conditions": [
+          "Chorioamnionitis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [
+          "Benzylpenicillin",
+          "Gentamicin",
+          "Metronidazole"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S03",
+      "section_type": "AlternativeAntibiotics",
+      "guideline_native_number": "1.6.2 (Table 1)",
+      "page_start": 16,
+      "page_end": 16,
+      "summary": "For non-severe penicillin allergy, recommends a GBS-active cephalosporin (e.g. cefotaxime), used cautiously and off-label, plus metronidazole if chorioamnionitis is present. For severe penicillin allergy, recommends vancomycin (or an alternative GBS-active agent chosen on sensitivity/local surveillance data) plus gentamicin and metronidazole if chorioamnionitis is present; vancomycin use here is off-label.",
+      "entities_mentioned": {
+        "conditions": [
+          "Chorioamnionitis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [
+          "Cefotaxime",
+          "Vancomycin",
+          "Gentamicin",
+          "Metronidazole"
+        ],
+        "pathogens": [
+          "GroupBStreptococcus"
+        ]
+      },
+      "unmapped_entities": [
+        "NonSeverePenicillinAllergy",
+        "SeverePenicillinAllergy"
+      ]
+    },
+    {
+      "section_id": "NICE_S04",
+      "section_type": "SpecialSituations",
+      "guideline_native_number": "1.7.1",
+      "page_start": 17,
+      "page_end": 17,
+      "summary": "Recommends offering immediate birth (induction or caesarean) to people between 34 and 37 weeks' gestation who have prolonged prelabour rupture of membranes together with GBS colonization, bacteriuria or infection at any point in the current pregnancy.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis"
+        ],
+        "risk_factors": [
+          "ProlongedROM",
+          "MaternalGBSColonization",
+          "Prematurity"
+        ],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": [
+          "GroupBStreptococcus"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S05",
+      "section_type": "Contraindications",
+      "guideline_native_number": "1.8.1",
+      "page_start": 17,
+      "page_end": 18,
+      "summary": "States that rifampicin-miconazole-impregnated catheters should not be used in newborn babies, as the evidence showed no additional benefit over standard catheters for reducing late-onset infection.",
+      "entities_mentioned": {
+        "conditions": [
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "RifampicinMiconazoleImpregnatedCatheter"
+      ]
+    },
+    {
+      "section_id": "NICE_S06",
+      "section_type": "RiskFactors",
+      "guideline_native_number": "Box 1 (1.9)",
+      "page_start": 18,
+      "page_end": 19,
+      "summary": "Lists risk factors for early-onset infection. Red flag: suspected or confirmed infection in another baby of a multiple pregnancy. Other risk factors: previous invasive GBS disease in a sibling or current-pregnancy GBS colonization/bacteriuria/infection; spontaneous pre-term birth before 37 weeks; rupture of membranes over 18 hours before a pre-term birth or over 24 hours before a term birth; suspected or confirmed maternal sepsis in the intrapartum or early postpartum period; suspected or confirmed chorioamnionitis.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis",
+          "SuspectedSepsis",
+          "Chorioamnionitis"
+        ],
+        "risk_factors": [
+          "PreviousInfantGBSDisease",
+          "MaternalGBSColonization",
+          "Prematurity",
+          "ProlongedROM",
+          "ClinicalChorioamnionitis"
+        ],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": [
+          "GroupBStreptococcus"
+        ]
+      },
+      "unmapped_entities": [
+        "MultipleBirthInfection"
+      ]
+    },
+    {
+      "section_id": "NICE_S07",
+      "section_type": "ClinicalSigns",
+      "guideline_native_number": "Box 2 (1.10.1)",
+      "page_start": 20,
+      "page_end": 21,
+      "summary": "Lists clinical indicators of possible early-onset infection. Red flags: apnoea, seizures, need for cardiopulmonary resuscitation, need for mechanical ventilation, signs of shock. Other indicators: altered behaviour or responsiveness, altered muscle tone, feeding difficulties, feed intolerance, abnormal heart rate, respiratory distress signs, hypoxia, persistent pulmonary hypertension, jaundice within 24 hours, encephalopathy signs, temperature abnormality, unexplained bleeding or coagulation abnormality, glucose abnormality, metabolic acidosis.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [
+          "Apnea",
+          "Seizures",
+          "Hypotension",
+          "Lethargy",
+          "FeedIntolerance",
+          "Tachycardia",
+          "RespiratoryDistress",
+          "TemperatureInstability"
+        ],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "CardiopulmonaryResuscitationNeed",
+        "MechanicalVentilationNeed",
+        "AlteredMuscleTone",
+        "Hypoxia",
+        "PersistentPulmonaryHypertension",
+        "NeonatalJaundice",
+        "NeonatalEncephalopathy",
+        "CoagulopathyOrBleeding",
+        "GlucoseInstability",
+        "MetabolicAcidosis"
+      ]
+    },
+    {
+      "section_id": "NICE_S08",
+      "section_type": "WhenToStartAntibiotics",
+      "guideline_native_number": "1.10.3",
+      "page_start": 21,
+      "page_end": 22,
+      "summary": "Sets out a decision framework: babies with any red flag, or 2 or more non-red-flag risk factors/clinical indicators, should have pre-antibiotic investigations performed and start antibiotics without waiting for results; babies with only 1 non-red-flag risk factor or indicator should have clinical judgement applied on whether to withhold antibiotics and whether to monitor (at least 12 hours using a newborn early warning system if monitoring); babies with no risk factors or indicators continue routine postnatal care.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "NewbornEarlyWarningSystem"
+      ]
+    },
+    {
+      "section_id": "NICE_S09",
+      "section_type": "Monitoring",
+      "guideline_native_number": "1.10.4-1.10.5",
+      "page_start": 22,
+      "page_end": 23,
+      "summary": "Describes the Kaiser Permanente neonatal sepsis calculator as an alternative to the risk-factor framework for babies born after 34+0 weeks cared for in a neonatal unit, transitional care, or postnatal ward, restricted to use within a prospective audit that tracks numbers of babies correctly and incorrectly classified against culture-confirmed infection outcomes; if used, the calculator's classification should guide management.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis",
+          "CultureConfirmedSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "KaiserPermanenteNeonatalSepsisCalculator"
+      ]
+    },
+    {
+      "section_id": "NICE_S10",
+      "section_type": "RiskFactors",
+      "guideline_native_number": "1.12.1",
+      "page_start": 25,
+      "page_end": 25,
+      "summary": "When assessing or reviewing babies for late-onset infection, notes that prematurity, mechanical ventilation, prior surgery, and presence of a central catheter carry increased risk, and that infection in one baby of a multiple birth should prompt consideration of infection risk in the co-multiples.",
+      "entities_mentioned": {
+        "conditions": [
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [
+          "Prematurity"
+        ],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "MechanicalVentilation",
+        "CentralCatheter",
+        "PriorSurgery",
+        "MultipleBirthInfection"
+      ]
+    },
+    {
+      "section_id": "NICE_S11",
+      "section_type": "ClinicalSigns",
+      "guideline_native_number": "Table 2 (1.12.1)",
+      "page_start": 25,
+      "page_end": 26,
+      "summary": "Table of late-onset infection indicators by category: behaviour (carer concern for behaviour change, appears unwell, reduced wakefulness, abnormal cry), respiratory (respiratory rate \u226560/min, grunting, apnoea, low oxygen saturation), circulation (heart rate \u2265160bpm or <100bpm), skin (mottled/ashen appearance, cyanosis, non-blanching rash), and other features (temperature abnormality, feeding changes, abdominal distension, seizures, bulging fontanelle).",
+      "entities_mentioned": {
+        "conditions": [
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [
+          "Lethargy",
+          "Apnea",
+          "Tachycardia",
+          "TemperatureInstability",
+          "FeedIntolerance",
+          "Seizures"
+        ],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "RaisedRespiratoryRate",
+        "Grunting",
+        "LowOxygenSaturation",
+        "Bradycardia",
+        "MottledOrAshenSkin",
+        "Cyanosis",
+        "NonBlanchingRash",
+        "AbdominalDistension",
+        "BulgingFontanelle"
+      ]
+    },
+    {
+      "section_id": "NICE_S12",
+      "section_type": "LaboratoryInvestigations",
+      "guideline_native_number": "1.13.1-1.13.5",
+      "page_start": 28,
+      "page_end": 28,
+      "summary": "Recommends obtaining a blood culture before the first antibiotic dose, and measuring baseline CRP (used together with subsequent readings to assess likelihood of infection and response to treatment) whenever antibiotics are started for possible infection. Advises against routine urine microscopy/culture or skin swab testing in neonatal units unless localized infection signs are present; urine testing remains appropriate for late-onset infection in babies cared for outside neonatal units, per UTI guidance.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis",
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture",
+          "CRP"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "UrineMicroscopyCulture",
+        "SkinSwabCulture"
+      ]
+    },
+    {
+      "section_id": "NICE_S13",
+      "section_type": "LaboratoryInvestigations",
+      "guideline_native_number": "1.14.1",
+      "page_start": 29,
+      "page_end": 29,
+      "summary": "Recommends performing lumbar puncture for a cerebrospinal fluid sample, if safe to do so, when there is strong clinical suspicion of infection or clinical features suggesting meningitis.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis",
+          "SuspectedSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "LumbarPuncture"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S14",
+      "section_type": "Contraindications",
+      "guideline_native_number": "1.14.2-1.14.3",
+      "page_start": 29,
+      "page_end": 30,
+      "summary": "Requires stabilizing an unprotected airway, respiratory compromise, shock, uncontrolled seizures, or bleeding risk before lumbar puncture. Lists contraindications: extensive or rapidly spreading purpura, infection at the puncture site, risk factors for an evolving space-occupying lesion, and features suggesting raised intracranial pressure (new focal neurological signs, abnormal pupillary reactions, progressive fall in consciousness).",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "clinical_signs": [
+          "Seizures",
+          "Hypotension"
+        ],
+        "investigations": [
+          "LumbarPuncture"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "Purpura",
+        "RaisedIntracranialPressure",
+        "SpaceOccupyingLesion",
+        "UnprotectedAirway"
+      ]
+    },
+    {
+      "section_id": "NICE_S15",
+      "section_type": "LaboratoryInvestigations",
+      "guideline_native_number": "1.14.5-1.14.11",
+      "page_start": 30,
+      "page_end": 31,
+      "summary": "Specifies CSF investigations for suspected bacterial meningitis: red/white cell count and differential, total protein, glucose concentration (with CSF:blood glucose ratio), Gram-stain microscopy, culture and sensitivities, and PCR for relevant pathogens. Cell counts, protein and glucose results should be available within 4 hours. Interpretation should account for blood contamination, prior antibiotic exposure and age-appropriate reference thresholds, alongside clinical presentation and maternal history; alternative causes should be considered if results are abnormal.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "LumbarPuncture"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "CSFCellCount",
+        "CSFProtein",
+        "CSFGlucoseRatio",
+        "CSFGramStain",
+        "CSFPCR"
+      ]
+    },
+    {
+      "section_id": "NICE_S16",
+      "section_type": "StoppingCriteria",
+      "guideline_native_number": "1.15.3",
+      "page_start": 32,
+      "page_end": 32,
+      "summary": "States that CRP results alone must not be used to decide on starting, continuing, or stopping antibiotic treatment.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "CRP"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S17",
+      "section_type": "Monitoring",
+      "guideline_native_number": "1.17.1-1.17.2",
+      "page_start": 34,
+      "page_end": 34,
+      "summary": "For babies on antibiotics due to late-onset infection risk factors/indicators, recommends measuring CRP 18 to 24 hours after starting treatment. Recommends considering a lumbar puncture (if not already done and thought safe) in a baby who has a positive blood culture other than coagulase negative staphylococcus, an unsatisfactory response to antibiotics, strong clinical suspicion of infection, or signs suggesting meningitis.",
+      "entities_mentioned": {
+        "conditions": [
+          "LateOnsetSepsis",
+          "Meningitis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "CRP",
+          "BloodCulture",
+          "LumbarPuncture"
+        ],
+        "medications": [],
+        "pathogens": [
+          "CoagulaseNegativeStaphylococci"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S18",
+      "section_type": "SpecialSituations",
+      "guideline_native_number": "1.18.1-1.19.1",
+      "page_start": 35,
+      "page_end": 35,
+      "summary": "For purulent eye discharge, recommends urgent swab sampling able to detect chlamydia and gonococcus, with empirical systemic antibiotic treatment for possible gonococcal infection started while microbiology results are awaited. For signs of umbilical infection (purulent discharge or periumbilical cellulitis), recommends blood culture, a swab for microscopy/culture, and starting IV flucloxacillin plus gentamicin; gentamicin should be stopped if the infection is confirmed not to be caused by a Gram-negative organism.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture"
+        ],
+        "medications": [
+          "Flucloxacillin",
+          "Gentamicin"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "Chlamydia",
+        "Gonococcus",
+        "PeriumbilicalCellulitis"
+      ]
+    },
+    {
+      "section_id": "NICE_S19",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "1.20.1-1.20.8",
+      "page_start": 36,
+      "page_end": 37,
+      "summary": "Recommends IV benzylpenicillin with gentamicin as first-choice empirical treatment for suspected early-onset infection unless local resistance data indicate otherwise. Benzylpenicillin is dosed 25 mg/kg every 12 hours (shortened to every 8 hours if the baby appears very unwell). Gentamicin starting dose is 5 mg/kg, with an evidence-supported (off-label) interval of every 36 hours; a second dose is usually given 36 hours after the first unless clinical judgement (very unwell baby, Gram-negative organism on culture) indicates a shorter interval. If Gram-negative sepsis is confirmed, an additional Gram-negative-active agent (e.g. cefotaxime) should be added and benzylpenicillin stopped.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis",
+          "CultureConfirmedSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [
+          "Benzylpenicillin",
+          "Gentamicin",
+          "Cefotaxime"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S20",
+      "section_type": "Duration",
+      "guideline_native_number": "1.21.1-1.21.2",
+      "page_start": 37,
+      "page_end": 38,
+      "summary": "Recommends 7 days of IV antibiotics for babies with a positive blood culture, or a negative culture where sepsis was strongly suspected. Suggests considering more than 7 days if the baby has not yet fully recovered, or if warranted by the pathogen identified on culture (seeking expert microbiological advice where needed).",
+      "entities_mentioned": {
+        "conditions": [
+          "CultureConfirmedSepsis",
+          "EarlyOnsetSepsis",
+          "SuspectedSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S21",
+      "section_type": "StoppingCriteria",
+      "guideline_native_number": "1.21.3-1.21.4",
+      "page_start": 37,
+      "page_end": 38,
+      "summary": "Directs stopping antibiotics at 36 hours when the blood culture is negative, initial clinical suspicion of infection was not strong, the baby's clinical condition is reassuring with no clinical indicators of possible infection, and CRP levels/trends are reassuring. If IV antibiotics continue beyond 36 hours despite a negative culture, the ongoing need should be reviewed at least every 24 hours based on initial suspicion, clinical progress, and CRP trends.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture",
+          "CRP"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S22",
+      "section_type": "AlternativeAntibiotics",
+      "guideline_native_number": "1.22.1-1.22.6",
+      "page_start": 38,
+      "page_end": 39,
+      "summary": "For babies born from 35+0 weeks with a negative blood culture who need more than 36 hours of treatment because initial clinical suspicion was strong, recommends considering a switch from IV to oral antibiotics at or after 36 hours to complete a total of up to 7 days, provided the baby's clinical condition and CRP trends are reassuring and oral feeds are tolerated. Amoxicillin is the recommended oral agent unless local resistance data indicate otherwise (noted as not specifically licensed for this indication). Home treatment with parent/carer support can be considered, requiring senior neonatologist/paediatrician sign-off, parent/carer training and safety-netting before discharge, and at least 2 follow-up consultations including one at treatment completion.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture",
+          "CRP"
+        ],
+        "medications": [
+          "Amoxicillin"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S23",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "1.23.1-1.23.3",
+      "page_start": 40,
+      "page_end": 40,
+      "summary": "For babies with suspected late-onset infection already in a neonatal unit, recommends narrow-spectrum combination first-line therapy (e.g. IV flucloxacillin plus gentamicin), selected using local (or national) resistance data, ensuring coverage of both Gram-positive and Gram-negative organisms, with an anaerobic agent (e.g. metronidazole) added if necrotising enterocolitis is suspected. Babies admitted from home should be treated per the relevant suspected-sepsis-in-under-16s recommendations.",
+      "entities_mentioned": {
+        "conditions": [
+          "LateOnsetSepsis",
+          "SuspectedSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [
+          "Flucloxacillin",
+          "Gentamicin",
+          "Metronidazole"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "NecrotisingEnterocolitis"
+      ]
+    },
+    {
+      "section_id": "NICE_S24",
+      "section_type": "StoppingCriteria",
+      "guideline_native_number": "1.24.1",
+      "page_start": 41,
+      "page_end": 41,
+      "summary": "For babies started on antibiotics for suspected late-onset infection, recommends considering stopping at 48 hours if the blood culture is negative, initial clinical suspicion was not strong, the baby's clinical condition is reassuring with no clinical indicators of infection, and CRP levels/trends are reassuring.",
+      "entities_mentioned": {
+        "conditions": [
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture",
+          "CRP"
+        ],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S25",
+      "section_type": "Duration",
+      "guideline_native_number": "1.25.1-1.25.3",
+      "page_start": 41,
+      "page_end": 42,
+      "summary": "Recommends 7 days of treatment for babies with a positive blood culture, with consideration of a longer course for incomplete recovery, certain pathogens (e.g. Gram-negative organisms, Staphylococcus aureus), or specific infection sites (intra-abdominal co-pathology, necrotising enterocolitis, osteomyelitis, catheter infection). A shorter course is recommended when recovery is prompt and either no pathogen or only a common commensal (e.g. coagulase negative staphylococcus) is identified. Ongoing antibiotics beyond 48 hours with negative cultures should be reviewed at least every 24 hours.",
+      "entities_mentioned": {
+        "conditions": [
+          "CultureConfirmedSepsis",
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "BloodCulture",
+          "CRP"
+        ],
+        "medications": [],
+        "pathogens": [
+          "CoagulaseNegativeStaphylococci"
+        ]
+      },
+      "unmapped_entities": [
+        "StaphylococcusAureus",
+        "NecrotisingEnterocolitis",
+        "Osteomyelitis",
+        "CentralVenousCatheterInfection"
+      ]
+    },
+    {
+      "section_id": "NICE_S26",
+      "section_type": "SpecialSituations",
+      "guideline_native_number": "1.26.1",
+      "page_start": 43,
+      "page_end": 43,
+      "summary": "Recommends prophylactic oral nystatin for babies treated with antibiotics for suspected late-onset bacterial infection who have a birthweight up to 1,500 g or were born before 30 weeks' gestation, with IV fluconazole as an off-label alternative when oral administration is not feasible, dosed by clinical judgement.",
+      "entities_mentioned": {
+        "conditions": [
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [
+          "Prematurity"
+        ],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "Nystatin",
+        "Fluconazole",
+        "InvasiveFungalInfection"
+      ]
+    },
+    {
+      "section_id": "NICE_S27",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "1.27.1",
+      "page_start": 44,
+      "page_end": 44,
+      "summary": "For babies in a neonatal unit with suspected meningitis and an unknown causative pathogen, recommends IV amoxicillin plus cefotaxime.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [
+          "Amoxicillin",
+          "Cefotaxime"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S28",
+      "section_type": "AlternativeAntibiotics",
+      "guideline_native_number": "1.27.2-1.27.6",
+      "page_start": 44,
+      "page_end": 45,
+      "summary": "If meningitis is shown to be Gram-negative, stop amoxicillin and continue cefotaxime alone. If Gram-positive on Gram stain, continue amoxicillin and cefotaxime pending culture and seek microbiological advice. If CSF culture is positive for GBS, consider changing to benzylpenicillin (50 mg/kg every 12 hours, normally at least 14 days) plus gentamicin (starting 5 mg/kg every 36 hours, adjusted per clinical judgement/trough levels, for 5 days). If culture is positive for Listeria, consider stopping cefotaxime and treating with amoxicillin and gentamicin. Other Gram-positive organisms besides GBS or Listeria warrant expert microbiological advice.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [
+          "Amoxicillin",
+          "Cefotaxime",
+          "Benzylpenicillin",
+          "Gentamicin"
+        ],
+        "pathogens": [
+          "GroupBStreptococcus",
+          "ListeriaMonocytogenes"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S29",
+      "section_type": "SpecialSituations",
+      "guideline_native_number": "1.28.1-1.28.2",
+      "page_start": 45,
+      "page_end": 45,
+      "summary": "Advises against routinely restricting fluid intake below routine maintenance needs in babies with bacterial meningitis, and recommends giving maintenance fluids orally or by enteral tube where tolerated.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S30",
+      "section_type": "Monitoring",
+      "guideline_native_number": "1.35.1-1.35.5",
+      "page_start": 51,
+      "page_end": 51,
+      "summary": "Recommends measuring trough gentamicin concentration immediately before the second dose (to inform the third dose), repeating before every subsequent third dose or more often if there is concern about prior troughs or renal function. Target trough is under 2 mg/litre (under 1 mg/litre if the course exceeds 3 doses). Doses should not be withheld solely for delayed trough results unless there is evidence of impaired renal function (e.g. raised urea/creatinine or anuria).",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [
+          "Creatinine"
+        ],
+        "medications": [
+          "Gentamicin"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "SerumUrea",
+        "Anuria"
+      ]
+    },
+    {
+      "section_id": "NICE_S31",
+      "section_type": "Monitoring",
+      "guideline_native_number": "1.36.1-1.36.3",
+      "page_start": 51,
+      "page_end": 52,
+      "summary": "Recommends considering peak gentamicin concentration measurement (taken 1 hour after dosing) in selected babies, such as those with oedema, macrosomia, poor response to treatment, or confirmed Gram-negative infection; suggests considering a dose increase if the peak is below 8 mg/litre in babies with Gram-negative or staphylococcal infection.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [
+          "Gentamicin"
+        ],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "Oedema",
+        "Macrosomia"
+      ]
+    },
+    {
+      "section_id": "NICE_S32",
+      "section_type": "SpecialSituations",
+      "guideline_native_number": "1.37.1-1.37.2",
+      "page_start": 53,
+      "page_end": 53,
+      "summary": "Suggests considering completion of IV antibiotic courses outside hospital (e.g. at home or via a midwifery-led unit) for babies who are clinically well with adequate local support, taking into account the baby's clinical needs and the competencies required for safe care (e.g. IV cannula insertion and management).",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis",
+          "LateOnsetSepsis"
+        ],
+        "risk_factors": [],
+        "clinical_signs": [],
+        "investigations": [],
+        "medications": [],
+        "pathogens": []
+      },
+      "unmapped_entities": [
+        "IntravenousCannula"
+      ]
+    },
+    {
+      "section_id": "NICE_S_PC01",
+      "section_type": "ParentCommunication",
+      "guideline_native_number": "1.4 (carers)",
+      "page_start": 9,
+      "page_end": 9,
+      "summary": "When infection is clinically suspected, talk to the baby's parents/carers, explain the reason for concern and the management options (observation, investigations, or antibiotic treatment); do not delay treatment, but give time for questions where possible before treatment decisions are made.",
+      "entities_mentioned": {},
+      "unmapped_entities": [
+        "SharedDecisionMaking"
+      ]
+    },
+    {
+      "section_id": "NICE_S_PC02",
+      "section_type": "ParentCommunication",
+      "guideline_native_number": "1.4 (carers) [2021]",
+      "page_start": 9,
+      "page_end": 9,
+      "summary": "When starting antibiotics for suspected early- or late-onset infection, discuss with parents/carers: the reason for treatment, the risks and benefits for their baby, the planned observations/investigations (including what guides stopping treatment), the chosen antibiotic regimen and how it will be given, expected duration, and any impact on where the baby or birthing parent will be cared for.",
+      "entities_mentioned": {},
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S_PC03",
+      "section_type": "ParentCommunication",
+      "guideline_native_number": "1.4 (carers) [2021]",
+      "page_start": 9,
+      "page_end": 9,
+      "summary": "Maintain communication with the birthing parent during any handover of care related to infection risk, including planned staff changes, and include an update on infection status in the handover.",
+      "entities_mentioned": {},
+      "unmapped_entities": [
+        "CareHandover"
+      ]
+    },
+    {
+      "section_id": "NICE_S_PC04",
+      "section_type": "ParentCommunication",
+      "guideline_native_number": "1.4 (carers) [2012]",
+      "page_start": 9,
+      "page_end": 9,
+      "summary": "For babies considered at increased risk of early-onset infection, inform their parents and GP both verbally and in writing, at discharge from hospital/midwifery-led unit or in the immediate postnatal period if born at home.",
+      "entities_mentioned": {},
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S_PC05",
+      "section_type": "ParentCommunication",
+      "guideline_native_number": "1.4 (carers) [2012]",
+      "page_start": 9,
+      "page_end": 9,
+      "summary": "Advise parents/carers with a prior pregnancy affected by GBS colonisation, bacteriuria, or infection that a future baby will be at increased risk of early-onset GBS infection, to inform their maternity team of this history, and that intrapartum antibiotics will be offered in a future pregnancy; inform the GP of this risk in writing.",
+      "entities_mentioned": {
+        "risk_factors": [
+          "MaternalGBSColonization"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "NICE_S_PC06",
+      "section_type": "ParentCommunication",
+      "guideline_native_number": "[2024] Before transferring babies home",
+      "page_start": 13,
+      "page_end": 13,
+      "summary": "Before transferring a baby home, advise parents/carers (in person and in writing) to seek urgent medical help if the baby shows abnormal behaviour, is unusually floppy, has an abnormal temperature, abnormal breathing, a colour change, or new feeding difficulties.",
+      "entities_mentioned": {},
+      "unmapped_entities": [
+        "RedFlagSymptomAdvice"
+      ]
+    },
+    {
+      "section_id": "NICE_S_NF01",
+      "section_type": "NutritionFluid",
+      "guideline_native_number": "1.4 (carers) [2012]",
+      "page_start": 9,
+      "page_end": 9,
+      "summary": "Reassure parents/carers that a baby with or at increased risk of neonatal infection can usually continue breastfeeding, and that support will be given; if breastfeeding is temporarily not possible, provide support for expressing breast milk.",
+      "entities_mentioned": {},
+      "unmapped_entities": [
+        "BreastfeedingContinuation"
+      ]
+    },
+    {
+      "section_id": "NICE_S_NF02",
+      "section_type": "NutritionFluid",
+      "guideline_native_number": "[2024] Fluid restriction",
+      "page_start": 45,
+      "page_end": 45,
+      "summary": "Do not routinely restrict fluid intake below routine maintenance needs in babies with confirmed bacterial meningitis; give maintenance fluids orally or by enteral tube if tolerated (see NICE's separate guideline on intravenous fluid therapy in children and young people for further guidance).",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis"
+        ]
+      },
+      "unmapped_entities": [
+        "MaintenanceFluidRate"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+id,guideline_id,section_type,text_summary,page,strength_grade,section_id_ref
+WHO_REC_001,WHO,Diagnosis,WHO 7-sign IMCI algorithm recommended to identify infants aged 0-59 days with possible SBI needing further evaluation/treatment (non-hospital settings),18,Strong/moderate-certainty,WHO_S01
+WHO_REC_002,WHO,WhenToStartAntibiotics,Infants aged 0-59 days with IMCI signs of critical illness should be referred to hospital,22,Strong/very-low-certainty,WHO_S02
+WHO_REC_003,WHO,FirstLineAntibiotics,If referral for critical illness not possible: ampicillin IM/IV plus gentamicin IM/IV for at least 10 days,22,Strong/very-low-certainty,WHO_S02_b
+WHO_REC_004,WHO,FirstLineAntibiotics,"Clinical severe infection, referral not possible (regimen 4): oral amoxicillin for at least 7 days plus gentamicin IM/IV for at least 7 days",25,Strong/low-certainty,WHO_S03
+WHO_REC_005,WHO,AlternativeAntibiotics,"Clinical severe infection, if 7 days of gentamicin IM not feasible (regimen 3): oral amoxicillin for at least 7 days plus gentamicin IM/IV for only 2 days",25,Conditional/low-certainty,WHO_S03_b
+WHO_REC_006,WHO,FirstLineAntibiotics,"Fast breathing as only sign, aged 0-6 days, referral not possible: oral amoxicillin for at least 7 days",31,Strong/low-certainty,WHO_S04
+WHO_REC_007,WHO,FirstLineAntibiotics,"Fast breathing as only sign, aged 7-59 days: oral amoxicillin for at least 7 days, can be managed outside hospital",35,Strong/very-low-certainty,WHO_S05
+WHO_REC_008,WHO,Diagnosis,No recommendation on hospital-based clinical-sign algorithms for diagnosing sepsis (0-59 days); labs used in reviewed studies not feasible in low-resource settings,40,No recommendation,WHO_S06
+WHO_REC_009,WHO,FirstLineAntibiotics,"Hospitalized, suspected sepsis (0-59 days): ampicillin IM/IV plus gentamicin IM/IV for at least 10 days, first-choice",43,Strong/moderate-certainty,WHO_S07
+WHO_REC_010,WHO,FirstLineAntibiotics,"Hospitalized, suspected staphylococcal sepsis (0-59 days): cloxacillin IM/IV plus gentamicin IM/IV for at least 10 days, first-choice (pathogen-directed)",47,Strong/very-low-certainty,WHO_S08
+WHO_REC_011,WHO,FirstLineAntibiotics,"Hospitalized, suspected meningitis (0-59 days): ampicillin, cefotaxime or ceftriaxone IM/IV plus gentamicin IM/IV for at least 3 weeks, first-choice; add ampicillin to third-gen cephalosporin+gentamicin (triple therapy) if Listeria monocytogenes suspected",50,Strong/very-low-certainty,WHO_S09
+WHO_REC_012,WHO,FirstLineAntibiotics,"Hospitalized, suspected pneumonia (0-59 days): ampicillin IM/IV plus gentamicin IM/IV for at least 7 days, first-choice",53,Strong/very-low-certainty,WHO_S10
+WHO_REC_013,WHO,FirstLineAntibiotics,"Hospitalized, suspected staphylococcal pneumonia (0-59 days): cloxacillin IM/IV plus gentamicin IM/IV for at least 7 days, first-choice (pathogen-directed)",56,Strong/very-low-certainty,WHO_S11

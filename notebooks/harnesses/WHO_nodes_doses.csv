@@ -1,0 +1,12 @@
+id,drug,ga_band,pna_band,weight_band,dose_amount,unit,frequency,route,max_dose
+WHO_DOSE_001,Ampicillin,,0-7d,,50,mg/kg,every 12 hours,IM/IV,
+WHO_DOSE_002,Ampicillin,,>7d,,50,mg/kg,every 8 hours,IM/IV,
+WHO_DOSE_003,Gentamicin,,0-7d,,5,mg/kg,once daily,IM/IV,
+WHO_DOSE_004,Gentamicin,,>7d,,7.5,mg/kg,once daily,IM/IV,
+WHO_DOSE_005,Amoxicillin,,0-7d,,50,mg/kg,every 12 hours,oral,
+WHO_DOSE_006,Amoxicillin,,>7d,,50,mg/kg,every 8 hours,oral,
+WHO_DOSE_007,Cloxacillin,,0-7d,,50,mg/kg,every 12 hours,IM/IV,
+WHO_DOSE_008,Cloxacillin,,>7d,,50,mg/kg,every 8 hours,IM/IV,
+WHO_DOSE_009,Cefotaxime,,0-7d,,50,mg/kg,every 12 hours,IM/IV,
+WHO_DOSE_010,Cefotaxime,,>7d,,50,mg/kg,every 6 hours,IM/IV,
+WHO_DOSE_011,Ceftriaxone,,any (0-59d),,100,mg/kg,once daily,IM/IV,

@@ -1,0 +1,264 @@
+{
+  "guideline_id": "WHO",
+  "source_meta": {
+    "title": "WHO recommendations for management of serious bacterial infections in infants aged 0-59 days",
+    "org": "World Health Organization",
+    "year": "2024",
+    "region": "Global"
+  },
+  "sections": [
+    {
+      "section_id": "WHO_S01",
+      "section_type": "Diagnosis",
+      "guideline_native_number": "A.1",
+      "page_start": 17,
+      "page_end": 21,
+      "summary": "In non-hospital settings, the WHO 7-sign IMCI algorithm is recommended to identify young infants (0-59 days) with possible serious bacterial infection who need further evaluation or treatment. Strong recommendation, moderate-certainty evidence, based on two studies (9284 infants) showing sensitivity ~0.79 and specificity ~0.77 overall.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": []
+      },
+      "unmapped_entities": [
+        "PossibleSeriousBacterialInfection (PSBI)"
+      ]
+    },
+    {
+      "section_id": "WHO_S02",
+      "section_type": "WhenToStartAntibiotics",
+      "guideline_native_number": "A.2",
+      "page_start": 22,
+      "page_end": 23,
+      "summary": "Young infants aged 0-59 days with IMCI signs of critical illness should be referred to hospital. Strong recommendation, very low-certainty evidence (no included trials; based on GDG consensus).",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": []
+      },
+      "unmapped_entities": [
+        "CriticalIllness"
+      ]
+    },
+    {
+      "section_id": "WHO_S02_b",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "A.2",
+      "page_start": 22,
+      "page_end": 23,
+      "summary": "If hospital referral is not possible for an infant with critical illness, ampicillin IM/IV plus gentamicin IM/IV for at least 10 days is recommended. Strong recommendation, very low-certainty evidence.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Ampicillin",
+          "Gentamicin"
+        ]
+      },
+      "unmapped_entities": [
+        "CriticalIllness"
+      ]
+    },
+    {
+      "section_id": "WHO_S03",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "A.3a (regimen 4)",
+      "page_start": 25,
+      "page_end": 26,
+      "summary": "Young infants with IMCI signs of clinical severe infection should be referred to hospital. If referral is not possible, oral amoxicillin for at least 7 days plus gentamicin IM/IV for at least 7 days is recommended. Strong recommendation, low-certainty evidence, based on four trials (9823 infants).",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Amoxicillin",
+          "Gentamicin"
+        ]
+      },
+      "unmapped_entities": [
+        "ClinicalSevereInfection"
+      ]
+    },
+    {
+      "section_id": "WHO_S03_b",
+      "section_type": "AlternativeAntibiotics",
+      "guideline_native_number": "A.3b (regimen 3)",
+      "page_start": 25,
+      "page_end": 26,
+      "summary": "If 7 days of gentamicin IM is not feasible, oral amoxicillin for at least 7 days plus gentamicin IM/IV for only 2 days may be considered. Conditional recommendation, low-certainty evidence, based on a single trial in Africa.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Amoxicillin",
+          "Gentamicin"
+        ]
+      },
+      "unmapped_entities": [
+        "ClinicalSevereInfection"
+      ]
+    },
+    {
+      "section_id": "WHO_S04",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "A.4",
+      "page_start": 31,
+      "page_end": 32,
+      "summary": "Young infants aged 0-6 days with fast breathing as the only IMCI sign of illness should be referred to hospital. If referral is not possible, oral amoxicillin for at least 7 days is recommended. Strong recommendation, low-certainty evidence, based on two RCTs (1308 infants).",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Amoxicillin"
+        ]
+      },
+      "unmapped_entities": [
+        "IsolatedFastBreathing (0-6 days)"
+      ]
+    },
+    {
+      "section_id": "WHO_S05",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "A.5",
+      "page_start": 35,
+      "page_end": 36,
+      "summary": "Young infants aged 7-59 days with fast breathing as the only IMCI sign of illness should be treated with oral amoxicillin for at least 7 days and can be managed outside hospital. Strong recommendation, very low-certainty evidence, based on three trials (4307 infants).",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Amoxicillin"
+        ]
+      },
+      "unmapped_entities": [
+        "IsolatedFastBreathing (7-59 days)"
+      ]
+    },
+    {
+      "section_id": "WHO_S06",
+      "section_type": "Diagnosis",
+      "guideline_native_number": "B.1",
+      "page_start": 40,
+      "page_end": 42,
+      "summary": "No recommendation made on use of hospital-based clinical-sign algorithms for diagnosing sepsis in infants 0-59 days, as all 28 reviewed studies used algorithms with laboratory tests not currently feasible in low-resource settings. Further research proposed using harmonized, standardized assessment tools.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "investigations": [
+          "CRP",
+          "FullBloodCount"
+        ]
+      },
+      "unmapped_entities": [
+        "SuspectedSepsis (as diagnostic-accuracy target, hospital setting)",
+        "Procalcitonin (PCT) discriminatory-ability evidence",
+        "ErythrocyteSedimentationRate",
+        "WhiteCellCount"
+      ]
+    },
+    {
+      "section_id": "WHO_S07",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "B.2",
+      "page_start": 43,
+      "page_end": 46,
+      "summary": "In young infants aged 0-59 days hospitalized with suspected sepsis, ampicillin IM/IV plus gentamicin IM/IV for at least 10 days is recommended as first-choice antibiotic management. Strong recommendation, moderate-certainty evidence, based on six trials (1083 infants) comparing third-generation cephalosporins to this regimen.",
+      "entities_mentioned": {
+        "conditions": [
+          "SuspectedSepsis"
+        ],
+        "risk_factors": [],
+        "medications": [
+          "Ampicillin",
+          "Gentamicin"
+        ]
+      },
+      "unmapped_entities": [
+        "Ceftriaxone",
+        "third-generation cephalosporins (unspecified/general class term)"
+      ]
+    },
+    {
+      "section_id": "WHO_S08",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "B.3",
+      "page_start": 47,
+      "page_end": 49,
+      "summary": "In young infants hospitalized with suspected staphylococcal sepsis, cloxacillin IM/IV plus gentamicin IM/IV for at least 10 days is recommended as first-choice antibiotic management. Strong recommendation, very low-certainty evidence; no included trials, based on GDG consensus. This is a pathogen-directed regimen (staphylococcal coverage), not treatment of a generic named condition.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Gentamicin"
+        ]
+      },
+      "unmapped_entities": [
+        "SuspectedStaphylococcalSepsis",
+        "Cloxacillin",
+        "Staphylococcus species (unspecified - document does not distinguish S. aureus vs coagulase-negative staphylococci)"
+      ]
+    },
+    {
+      "section_id": "WHO_S09",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "B.4",
+      "page_start": 50,
+      "page_end": 52,
+      "summary": "In young infants hospitalized with suspected meningitis, ampicillin, cefotaxime or ceftriaxone IM/IV plus gentamicin IM/IV for at least three weeks is recommended as first-choice antibiotic management. Strong recommendation, very low-certainty evidence; no included trials, based on GDG consensus. Ampicillin should be added to third-generation cephalosporin plus gentamicin (triple therapy) specifically when Listeria monocytogenes is suspected -- a pathogen-directed addition rather than treatment of the general condition.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis"
+        ],
+        "risk_factors": [],
+        "medications": [
+          "Ampicillin",
+          "Cefotaxime",
+          "Gentamicin"
+        ],
+        "pathogens": [
+          "ListeriaMonocytogenes"
+        ]
+      },
+      "unmapped_entities": [
+        "Ceftriaxone"
+      ]
+    },
+    {
+      "section_id": "WHO_S10",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "B.5",
+      "page_start": 53,
+      "page_end": 55,
+      "summary": "In young infants hospitalized with suspected pneumonia, ampicillin IM/IV plus gentamicin IM/IV for at least 7 days is recommended as first-choice antibiotic management. Strong recommendation, very low-certainty evidence; no included trials, based on GDG consensus.",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Ampicillin",
+          "Gentamicin"
+        ]
+      },
+      "unmapped_entities": [
+        "SuspectedPneumonia"
+      ]
+    },
+    {
+      "section_id": "WHO_S11",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": "B.6",
+      "page_start": 56,
+      "page_end": 58,
+      "summary": "In young infants hospitalized with suspected staphylococcal pneumonia, cloxacillin IM/IV plus gentamicin IM/IV for at least 7 days is recommended as first-choice antibiotic management. Strong recommendation, very low-certainty evidence; no included trials. Pathogen-directed regimen (staphylococcal coverage).",
+      "entities_mentioned": {
+        "conditions": [],
+        "risk_factors": [],
+        "medications": [
+          "Gentamicin"
+        ]
+      },
+      "unmapped_entities": [
+        "SuspectedStaphylococcalPneumonia",
+        "Cloxacillin",
+        "Staphylococcus species (unspecified)"
+      ]
+    }
+  ]
+}

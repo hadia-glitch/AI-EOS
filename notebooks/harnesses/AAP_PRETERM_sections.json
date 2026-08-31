@@ -1,0 +1,277 @@
+{
+  "guideline_id": "AAP_PRETERM",
+  "source_meta": {
+    "title": "Management of Neonates Born at \u226434 6/7 Weeks\u2019 Gestation With Suspected or Proven Early-Onset Bacterial Sepsis",
+    "org": "American Academy of Pediatrics",
+    "year": "2018",
+    "region": "US"
+  },
+  "sections": [
+    {
+      "section_id": "AAP_PRETERM_S01",
+      "section_type": "RiskFactors",
+      "guideline_native_number": null,
+      "page_start": 2,
+      "page_end": 3,
+      "summary": "Chorioamnionitis / intraamniotic infection (IAI) is the primary clinical risk factor used to identify preterm infants at risk for EOS. Most preterm EOS occurs in infants born with some combination of PROM, preterm labor, or IAI concern. The relationship between PROM/ROM duration and EOS risk is modified by gestational age, presence of chorioamnionitis, and administration of latency/intrapartum antibiotics, so risk cannot be assessed the same way as in term infants.",
+      "entities_mentioned": {
+        "conditions": [
+          "Chorioamnionitis"
+        ],
+        "risk_factors": [
+          "ClinicalChorioamnionitis",
+          "ProlongedROM",
+          "Prematurity"
+        ]
+      },
+      "unmapped_entities": [
+        "IntraamnioticInfection",
+        "GestationalAge",
+        "PretermLabor"
+      ]
+    },
+    {
+      "section_id": "AAP_PRETERM_S02",
+      "section_type": "WhenToStartAntibiotics",
+      "guideline_native_number": null,
+      "page_start": 4,
+      "page_end": 4,
+      "summary": "Preterm infants born by cesarean delivery for maternal noninfectious illness or placental insufficiency, without labor, induction attempts, or ROM before delivery, are at lower risk for EOS. Acceptable initial approaches: no labs/no empirical antibiotics, or a blood culture with clinical monitoring; empirical antibiotics are reasonable but not mandatory if the infant fails to improve or has severe instability.",
+      "entities_mentioned": {
+        "risk_factors": [
+          "Prematurity"
+        ],
+        "investigations": [
+          "BloodCulture"
+        ]
+      },
+      "unmapped_entities": [
+        "CesareanDelivery",
+        "ObstetricIndicatedPretermBirth"
+      ]
+    },
+    {
+      "section_id": "AAP_PRETERM_S03",
+      "section_type": "WhenToStartAntibiotics",
+      "guideline_native_number": null,
+      "page_start": 4,
+      "page_end": 4,
+      "summary": "Infants born preterm because of cervical incompetence, preterm labor, PROM, chorioamnionitis/IAI, or unexplained nonreassuring fetal status are at highest risk for EOS. The recommended approach is a blood culture plus empirical antibiotic therapy; CSF culture before antibiotics should be considered if the infant will tolerate it and it will not delay treatment.",
+      "entities_mentioned": {
+        "conditions": [
+          "Chorioamnionitis"
+        ],
+        "risk_factors": [
+          "ProlongedROM",
+          "ClinicalChorioamnionitis",
+          "Prematurity"
+        ],
+        "investigations": [
+          "BloodCulture",
+          "LumbarPuncture"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "AAP_PRETERM_S04",
+      "section_type": "LaboratoryInvestigations",
+      "guideline_native_number": null,
+      "page_start": 4,
+      "page_end": 5,
+      "summary": "Blood culture remains the diagnostic standard for EOS in the absence of validated molecular tests; surface cultures, gastric aspirate analysis, and urine culture are not diagnostic at <72 hours of age. Modern systems reliably detect bacteremia at 1-10 CFU with a minimum 1 mL inoculum. Using one aerobic and one anaerobic bottle may improve organism recovery, since anaerobic species (chiefly Bacteroides fragilis) were isolated in up to 16% of VLBW EOS cases in one study.",
+      "entities_mentioned": {
+        "investigations": [
+          "BloodCulture"
+        ]
+      },
+      "unmapped_entities": [
+        "AnaerobicBloodCulture",
+        "PediatricCultureBottleVolume"
+      ]
+    },
+    {
+      "section_id": "AAP_PRETERM_S05",
+      "section_type": "LaboratoryInvestigations",
+      "guideline_native_number": null,
+      "page_start": 5,
+      "page_end": 5,
+      "summary": "Meningitis incidence is higher among preterm infants than in the overall birth population and did not occur among lower-risk preterm infants in one study. Because lumbar puncture is often deferred until after antibiotics are started, true meningitis incidence may be underestimated. Physicians should balance infant stability, EOS risk, and the harms of prolonged antibiotics when deciding whether to perform lumbar puncture in critically ill preterm infants.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis"
+        ],
+        "investigations": [
+          "LumbarPuncture"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "AAP_PRETERM_S06",
+      "section_type": "LaboratoryInvestigations",
+      "guideline_native_number": null,
+      "page_start": 5,
+      "page_end": 5,
+      "summary": "WBC count, immature-to-total neutrophil ratio, and absolute neutrophil count lack sensitivity for predicting EOS in infants <34 weeks. The strongest positive likelihood ratios (>3) were seen with WBC <1000/\u00b5L, ANC <1000, and I:T ratio >0.25; WBC >50,000 and platelet count <50,000 had only modest association.",
+      "entities_mentioned": {
+        "investigations": [
+          "FullBloodCount",
+          "ITRatio",
+          "PlateletCount"
+        ]
+      },
+      "unmapped_entities": [
+        "AbsoluteNeutrophilCount"
+      ]
+    },
+    {
+      "section_id": "AAP_PRETERM_S07",
+      "section_type": "LaboratoryInvestigations",
+      "guideline_native_number": null,
+      "page_start": 5,
+      "page_end": 5,
+      "summary": "CRP and procalcitonin rise in response to multiple inflammatory stimuli, not just infection, and procalcitonin also rises physiologically over the first 24-36 hours of life. Single postnatal values are neither sensitive nor specific enough to guide EOS decisions. Consistently normal serial values over the first 48 hours are reassuring, but abnormal serial values alone should not be used to extend antibiotic therapy without a confirmed culture.",
+      "entities_mentioned": {
+        "investigations": [
+          "CRP",
+          "Procalcitonin"
+        ]
+      },
+      "unmapped_entities": [
+        "Interleukin6",
+        "Interleukin8"
+      ]
+    },
+    {
+      "section_id": "AAP_PRETERM_S08",
+      "section_type": "Diagnosis",
+      "guideline_native_number": null,
+      "page_start": 6,
+      "page_end": 7,
+      "summary": "EOS is diagnosed only by a positive blood or CSF culture; it cannot be diagnosed by laboratory tests such as complete blood count or CRP alone.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis"
+        ],
+        "investigations": [
+          "BloodCulture",
+          "LumbarPuncture",
+          "FullBloodCount",
+          "CRP"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "AAP_PRETERM_S09",
+      "section_type": "FirstLineAntibiotics",
+      "guideline_native_number": null,
+      "page_start": 5,
+      "page_end": 6,
+      "summary": "Ampicillin plus gentamicin is first-choice empirical therapy for preterm EOS, covering GBS, most streptococcal/enterococcal species, and Listeria monocytogenes. Roughly two-thirds of E coli isolates are ampicillin-resistant but most remain gentamicin-sensitive; extended-spectrum beta-lactamase producers are rare, so routine broader-spectrum therapy is not warranted and may be harmful.",
+      "entities_mentioned": {
+        "medications": [
+          "Ampicillin",
+          "Gentamicin"
+        ],
+        "pathogens": [
+          "GroupBStreptococcus",
+          "ListeriaMonocytogenes",
+          "EscherichiaColi"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "AAP_PRETERM_S10",
+      "section_type": "AlternativeAntibiotics",
+      "guideline_native_number": null,
+      "page_start": 6,
+      "page_end": 6,
+      "summary": "For severely ill preterm infants at highest risk for gram-negative EOS (e.g., VLBW infants after prolonged PROM or prolonged antepartum antibiotic exposure), empirical addition of broader-spectrum antibiotics may be considered pending culture results, guided by local resistance data; roughly 1-2% of E coli isolates are resistant to both ampicillin and gentamicin, and B fragilis is not uniformly sensitive to either.",
+      "entities_mentioned": {
+        "risk_factors": [
+          "ProlongedROM",
+          "Prematurity"
+        ],
+        "pathogens": [
+          "EscherichiaColi"
+        ]
+      },
+      "unmapped_entities": [
+        "ExtendedSpectrumBetaLactamaseProducer",
+        "BacteroidesFragilis"
+      ]
+    },
+    {
+      "section_id": "AAP_PRETERM_S11",
+      "section_type": "StoppingCriteria",
+      "guideline_native_number": null,
+      "page_start": 6,
+      "page_end": 6,
+      "summary": "When initial blood cultures are negative, antibiotic therapy should be discontinued by 36-48 hours of incubation unless there is evidence of site-specific infection. Persistent cardiorespiratory instability alone, or isolated laboratory abnormalities, are rarely sufficient justification for prolonged empirical antibiotics.",
+      "entities_mentioned": {
+        "investigations": [
+          "BloodCulture"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "AAP_PRETERM_S12",
+      "section_type": "Monitoring",
+      "guideline_native_number": null,
+      "page_start": 3,
+      "page_end": 4,
+      "summary": "Prolonged empirical antibiotic exposure in the absence of culture-confirmed infection has been associated with increased risk of necrotizing enterocolitis, death, and bronchopulmonary dysplasia in preterm infants across multiple cohort studies. Physicians should weigh this risk/benefit balance when deciding whether to initiate or continue empirical antibiotics.",
+      "entities_mentioned": {
+        "conditions": [
+          "EarlyOnsetSepsis"
+        ]
+      },
+      "unmapped_entities": [
+        "NecrotizingEnterocolitis",
+        "BronchopulmonaryDysplasia"
+      ]
+    },
+    {
+      "section_id": "AAP_PRETERM_S13",
+      "section_type": "SpecialSituations",
+      "guideline_native_number": null,
+      "page_start": 6,
+      "page_end": 6,
+      "summary": "When EOS is confirmed by blood culture, a lumbar puncture should be performed if not already done, and antibiotic therapy should be narrowed once sensitivities are known; infectious disease consultation should be considered for meningitis, other site-specific infections, or complex resistance patterns.",
+      "entities_mentioned": {
+        "conditions": [
+          "Meningitis",
+          "CultureConfirmedSepsis"
+        ],
+        "investigations": [
+          "LumbarPuncture",
+          "BloodCulture"
+        ]
+      },
+      "unmapped_entities": []
+    },
+    {
+      "section_id": "AAP_PRETERM_S14",
+      "section_type": "Contraindications",
+      "guideline_native_number": null,
+      "page_start": 6,
+      "page_end": 6,
+      "summary": "The only proven EOS-prevention strategy is appropriate maternal intrapartum antibiotic prophylaxis; neonatal-side practices cannot prevent EOS. Empirical intramuscular penicillin administered to all newborns to prevent GBS-specific EOS is not justified and is not endorsed by the AAP.",
+      "entities_mentioned": {
+        "medications": [
+          "Benzylpenicillin"
+        ],
+        "conditions": [
+          "LateOnsetSepsis"
+        ]
+      },
+      "unmapped_entities": [
+        "MaternalIntrapartumAntibioticProphylaxis"
+      ]
+    }
+  ]
+}
