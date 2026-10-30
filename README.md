@@ -7,6 +7,7 @@
 NeoGuard AI combines a trained, calibrated, SHAP-explainable machine learning risk model with a retrieval-augmented generation (RAG) pipeline and a multi-agent LLM verification system to give clinicians personalised, evidence-grounded, and continuously-updated sepsis risk assessments — with full transparency into *why* the system reached its conclusions and *where* every recommendation comes from.
 
 ---
+Short demo:https://drive.google.com/file/d/1txVzJRD7wyvlbKZAkRwLaSvrSlsM-RIy/view?usp=sharing
 
 ## Table of Contents
 
