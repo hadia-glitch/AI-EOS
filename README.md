@@ -1,414 +1,775 @@
-
-
 # NeoGuard AI
+### Explainable Neonatal Sepsis Risk Prediction, Evidence-Grounded RAG & Multi-Agent Clinical Decision Support
 
-**An AI-powered clinical decision support platform for Early-Onset Neonatal Sepsis (EOS) — the Neonatology module of a broader paediatric decision-support platform.**
+**NeoGuard AI** is an AI-powered neonatal early-onset sepsis (EOS) research and clinical decision-support platform that combines **calibrated machine learning, SHAP explainability, graph-enhanced retrieval-augmented generation (RAG), and Multi-Agent LLM verification** to support personalized risk assessment and guideline-grounded care-plan generation.
 
-NeoGuard AI combines a trained, calibrated, SHAP-explainable machine learning risk model with a retrieval-augmented generation (RAG) pipeline and a multi-agent LLM verification system to give clinicians personalised, evidence-grounded, and continuously-updated sepsis risk assessments — with full transparency into *why* the system reached its conclusions and *where* every recommendation comes from.
+Developed as part of a research internship at **TUKL (Technical University of Kaiserslautern) Lab, National University of Sciences & Technology (NUST)**, beginning in June 2026.
 
----
-Short demo:https://drive.google.com/file/d/1txVzJRD7wyvlbKZAkRwLaSvrSlsM-RIy/view?usp=sharing
+**Project status:** Research prototype · Experimental evaluation completed for initial cohorts · Research paper under preparation/review
 
-## Table of Contents
+**Core stack:** `Flutter` · `Python` · `FastAPI` · `Supabase` · `PostgreSQL/pgvector` · `Ollama` · `LlamaIndex` · `XGBoost` · `scikit-learn` · `SHAP` · `BM25` · `Graph RAG` · `Multi-Agent AI`
 
-- [Clinical Problem](#clinical-problem)
-- [Project Objectives](#project-objectives)
-- [System Architecture](#system-architecture)
-- [Risk Assessment Engine (ML Model)](#risk-assessment-engine-ml-model)
-- [User Workflow](#user-workflow)
-- [Patient Timeline & Longitudinal Record Maintenance](#patient-timeline--longitudinal-record-maintenance)
-- [De-identification & Privacy](#de-identification--privacy)
-- [Explainable AI](#explainable-ai)
-- [Data Engineering & Guideline Ingestion Pipeline](#data-engineering--guideline-ingestion-pipeline)
-- [Evidence & Literature Integration (RAG Pipeline)](#evidence--literature-integration-rag-pipeline)
-- [Clinical Explanation Generation](#clinical-explanation-generation)
-- [Care Plan Generation](#care-plan-generation)
-- [Multi-Agent Trustworthiness Layer](#multi-agent-trustworthiness-layer)
-- [Clinical Evidence Search Tab](#clinical-evidence-search-tab)
-- [How This Differs From Existing EOS Calculators](#how-this-differs-from-existing-eos-calculators)
-- [Technical Stack](#technical-stack)
-- [Technical Competencies Demonstrated](#technical-competencies-demonstrated)
-- [Evaluation Methodology](#evaluation-methodology)
-- [Deployment](#deployment)
-- [Scope & Limitations](#scope--limitations)
-- [Roadmap](#roadmap)
 
----
+[Watch the short demo](https://drive.google.com/file/d/1txVzJRD7wyvlbKZAkRwLaSvrSlsM-RIy/view?usp=sharing)
 
-## Clinical Problem
+For developements beyond Aug 2026 visit https://github.com/hadia-glitch/eosRAG (**contains comparison of risk prediction models based on different neonatal sepsis deatasets, RAG refinements, improved performance metrics and the final research paper**)
 
-Early-Onset Neonatal Sepsis (EOS) remains a leading cause of neonatal morbidity and mortality worldwide. Early recognition is difficult because clinical signs are often subtle and non-specific. Current practice frequently results in either:
+RESEARCH PAPER UPDATED (contains findings from the above mentioned repo too):https://drive.google.com/file/d/1yqYmS4B5Aia3irZY26Eluns2DE1bnBqc/view?usp=sharing
 
-- **Delayed identification** of infected neonates, or
-- **Unnecessary investigations and antibiotic exposure** in low-risk infants
 
-NeoGuard AI is designed to help clinicians balance these risks by providing personalised, continuously-updating risk assessment alongside evidence-based, guideline-grounded management recommendations.
+## Key Achievements
 
-## Project Objectives
+| Component | Research Achievement |
+|---|---|
+| **ML Risk Prediction** | **0.809 ROC-AUC**, **87.7% sensitivity** |
+| **Explainable AI** | SHAP-based feature contributions and calibrated predictions |
+| **Retrieval Benchmarking** | Five architectures evaluated over **100 clinical cases** |
+| **Graph Retrieval** | **0.809 Exact-ID MRR@10** |
+| **Graph Anchor Grounding** | **0.859 Recall** |
+| **Hybrid Retrieval** | **0.598 Section Precision**, **0.552 Section F1** |
+| **LLM Semantic Evaluation** | Hybrid achieved **0.950 Semantic MRR** and **0.913 Semantic NDCG** in the initial evaluation |
+| **Generation Safety** | Regimen-incomplete cases reduced from **6.7% to 0%** |
+| **Drug-Dose Grounding** | Ungrounded-dose cases reduced from **3.3% to 0%** |
+| **Multi-Agent Resolution** | Average resolution steps reduced from **3.00 to 2.27** |
+| **LLM-Based Clinical Usability** | Hybrid received **5.0/5** on the previously reported automated safety assessment |
 
-- Identify neonates at risk of Early-Onset Sepsis
-- Calculate individualised, calibrated risk estimates
-- Support evidence-based clinical decision-making
-- Promote antibiotic stewardship
-- Provide transparent, explainable recommendations — not a black box
-- Continuously update risk assessment as new clinical information becomes available across an infant's course
+> **Evaluation note:** Results are drawn from different experimental phases. The 100-case retrieval evaluation, initial 30-case semantic evaluation, ML holdout evaluation, and 30-case generation/Multi-Agent evaluations are reported separately. LLM-based clinical usability is an automated assessment, not independent clinician validation.
 
 ---
 
-## System Architecture
+## 1. Overview
 
-NeoGuard AI has four layers that compose into a single clinical request:
+Early-onset neonatal sepsis is a major neonatal healthcare challenge because early symptoms can be nonspecific and clinical deterioration may occur rapidly.
 
-1. **ML Risk Assessment Engine** — a trained, calibrated, SHAP-explainable model produces the individualised risk score and category. This is treated as ground truth by everything downstream; the LLM layers never re-derive it.
-2. **RAG retrieval layer** — hybrid search over ingested guideline corpora (NICE NG195, AAP, WHO, EOSCAL literature), producing ranked, source-diverse, page-attributed evidence for the current patient.
-3. **Two-agent LLM generation layer** — an independent **generator** and **judge** produce and verify clinical explanations and care plans grounded in that retrieved evidence.
-4. **Deterministic resolution/safety-net layer** — a non-LLM control loop that actively re-searches for grounding before ever falling back to a labeled clinical default.
+Risk assessment requires integrating maternal history, neonatal examination findings, laboratory measurements, and evolving patient conditions.
 
-```
-Clinical Data Entry
-        │
-        ▼
-ML Risk Assessment Engine  ──►  risk_payload (score, category, layer breakdown, SHAP drivers)
-        │
-        ▼
-RAG Retrieval (hybrid BM25 + semantic, multi-guideline corpus)
-        │
-        ▼
-Generator LLM  ──►  draft explanation / care plan (evidence-labeled)
-        │
-        ▼
-Judge LLM  ──►  fact-check against risk_payload + evidence
-        │
-        ▼
-Resolution Agent (Care Plan only)  ──►  iterative re-ground → re-verify
-        │
-        ▼
-Clinician-facing output, every claim traceable to source
-```
+NeoGuard investigates a unified clinical AI workflow that combines:
+
+1. **Machine-learning risk prediction** to estimate individualized neonatal sepsis risk.
+2. **Explainable AI** to identify the factors influencing the prediction.
+3. **Evidence-grounded RAG** to retrieve relevant clinical guideline recommendations.
+4. **Personalized care-plan generation** based on risk predictions and patient history.
+5. **Multi-Agent verification and resolution** to detect and correct unsupported recommendations.
+6. **Deterministic safety controls** to identify important contraindication and treatment-completeness issues.
+7. **Longitudinal patient monitoring** to incorporate changing clinical conditions.
+
+The central objective is to move beyond isolated risk scoring toward **explainable, evidence-grounded, and verifiable clinical decision support**.
 
 ---
 
-## Risk Assessment Engine (ML Model)
+## 2. System Architecture
 
-The risk engine is a trained, calibrated, explainable machine learning pipeline — **not** a static rule-based calculator. It is a near drop-in for the app's existing risk payload contract, so the downstream RAG/explanation/care-plan pipeline and existing risk-driver UI need minimal changes to consume it.
+NeoGuard consists of four integrated components:
 
-### Why a trained model, not a fixed calculator
+- Calibrated ML risk-assessment engine.
+- Guideline-aware RAG retrieval engine.
+- LLM-based generation and verification agents.
+- Deterministic safety and resolution layer.
 
-Fixed tools such as the Kaiser Permanente EOS Calculator have meaningfully improved neonatal antibiotic stewardship, but they use a static prediction model, focus predominantly on maternal/perinatal factors, generate a one-time estimate at birth, and don't continuously update as new clinical information arrives. NeoGuard's ML engine is designed to be retrained, recalibrated, and to support dynamic reassessment as an infant's clinical picture evolves.
-
-### Development pipeline
-
-```
-Data → Leakage audit → Feature selection (Lasso + Boruta + domain-expert override)
-     → Dynamic 80:20 split (×5) → Model benchmark (GBM / XGBoost / SVM / RF / Ensemble)
-     → Champion selection → Isotonic calibration → Prevalence prior-correction
-     → SHAP explainability → App-contract payload → Backend + on-device export
-```
-
-### Benchmarked against real published clinical research
-
-Built using the same schema as **Kainth et al., *BMJ Paediatrics Open* 2026** (Delhi Neonatal Infection Study, n=2,924) — dual Lasso + Boruta feature selection with domain-expert override, dynamic stratified splitting, five-architecture benchmarking, and sensitivity-targeted threshold selection.
-
-After Bayes-correcting for prevalence, the model's **PPV (26.6%)** and **NPV (94.0%)** land within 1–2 points of that published study's external-validation numbers (24.0% / 95.7%) — despite being trained on a completely different dataset. This is strong evidence the *calibration methodology itself* is sound, independent of the specific training data.
-
-### Leakage audit
-
-A leakage audit — cross-checked via both Lasso coefficients and Random Forest feature importance — identified and excluded a lab feature and six symptom flags that were statistical artifacts of the training data rather than genuine predictive signal. This is exactly the kind of check that prevents a model from looking strong in testing and then failing in the field.
-
-### Performance
-
-- **AUC: 0.809** on a fully independent holdout set
-- **87.7% sensitivity** at the clinical screening threshold
-
-### Feature set (9 features, birth/perinatal)
-
-```
-gestational_age_weeks, birth_weight_kg, maternal_age, apgar_1min, apgar_5min,
-prom, maternal_infection, resuscitation_needed, is_csection
-```
-
-Lab features (`wbc_count`, `crp_mg_l`) are already scaffolded in the preprocessing pipeline (`preprocess(df, stage='B')`) for a future revision once richer serial lab data is incorporated — see [Roadmap](#roadmap).
-
-### Output contract
-
-The model emits a JSON payload compatible with the app's existing risk-result schema, so every downstream consumer (RAG query builder, explanation/care-plan generators, XAI driver chart) works unchanged:
-
-```json
-{
-  "total_score": 51.3,
-  "layer1_score": 12.1, "layer2_score": 8.4, "layer3_score": 0.0,
-  "category": "INTERMEDIATE",
-  "risk_category": "Intermediate",
-  "probability_per_1000": 513.0,
-  "below_eoscal_scope": false,
-  "drivers": [
-    {
-      "name": "Gestational age",
-      "points": -6.2,
-      "reason": "Gestational age = 39.1",
-      "contribution_percent": 24.3,
-      "layer": 2
-    }
-  ],
-  "combination_note": "Model: gbm, calibrated + prevalence-corrected to 41.0%.",
-  "model_version": "ml-gbm-v2"
-}
+```text
+                     Flutter Mobile Application
+                                |
+                                v
+                    Structured Clinical Data
+                                |
+                                v
+                   Client-Side De-identification
+                                |
+                                v
+                    ML Risk Prediction Engine
+                 GBM | XGBoost | SVM | RF
+                                |
+                                v
+                    Calibrated Risk Estimate
+                                |
+                                v
+                       SHAP Explanations
+                                |
+                                v
+                     Clinical Context Builder
+               Risk + Patient History + Trends
+                                |
+                                v
+                   Guideline-Aware RAG Engine
+                                |
+                +---------------+---------------+
+                |               |               |
+                v               v               v
+              BM25           Vector           Graph
+                |               |               |
+                +---------------+---------------+
+                                |
+                                v
+                     Hybrid Evidence Fusion
+                    Reciprocal Rank Fusion
+                                |
+                                v
+                     Cross-Encoder Reranking
+                                |
+                                v
+                      MMR Diversity Selection
+                                |
+                                v
+                      Context Reassembly
+                                |
+                                v
+                        Generator LLM
+                                |
+                                v
+                       Fact-Check Judge
+                                |
+                                v
+                       Resolution Agent
+                                |
+                                v
+                    Deterministic Safety Checks
+                                |
+                                v
+                   Personalized Clinical Care Plan
 ```
 
-`layer1` / `layer2` / `layer3` map to Maternal / Clinical-Birth / Laboratory factor groups. `risk_category` thresholds are pending clinical sign-off before production use.
+---
 
-### Dual deployment
+## 3. Machine-Learning Risk Prediction
 
-- **Backend**: the calibrated model plus the raw model (for full SHAP computation), served via `joblib`, behind a dedicated risk-assessment endpoint.
-- **On-device**: a distilled logistic-regression model exported as `eos_risk_model_lite.json`, with closed-form SHAP approximation (`coefficient × (value − mean)`) and **no ML runtime dependency** — matching the app's offline-first design so risk assessment keeps working without connectivity.
+### 3.1 Clinical feature engineering
+
+The clinical feature set was developed in collaboration with an **NHS clinician** to incorporate clinically relevant maternal, neonatal, and laboratory parameters.
+
+**Maternal and perinatal features:**
+
+- Gestational age.
+- Maternal temperature.
+- Duration of rupture of membranes.
+- Group B Streptococcus status.
+- Intrapartum antibiotic exposure.
+- Suspected chorioamnionitis.
+- Delivery characteristics.
+
+**Neonatal features:**
+
+- Respiratory distress.
+- Oxygen requirements.
+- Temperature instability.
+- Apgar scores.
+- Feeding difficulties.
+- Perfusion abnormalities.
+- Neurological status.
+
+**Laboratory features:**
+
+- White blood cell count.
+- C-reactive protein.
+- Procalcitonin.
+- Platelet count.
+- Blood culture results.
+- Longitudinal laboratory trends.
+
+### 3.2 Model-development pipeline
+
+```text
+Clinical Dataset
+       |
+       v
+Data Preprocessing
+       |
+       v
+Feature Selection
+(Lasso + Boruta + Clinical Review)
+       |
+       v
+Stratified Train/Test Evaluation
+       |
+       v
+Model Benchmarking
+       |
+       +-- Gradient Boosting
+       +-- XGBoost
+       +-- Support Vector Machine
+       +-- Random Forest
+       +-- Ensemble
+       |
+       v
+Model Selection
+       |
+       v
+Isotonic Calibration
+       |
+       v
+Prevalence Adjustment
+       |
+       v
+SHAP Explainability
+       |
+       v
+Backend / On-Device Inference
+```
+
+### 3.3 Phase 1 — Risk prediction results
+
+| Metric | Result |
+|---|---:|
+| **ROC-AUC** | **0.809** |
+| **Sensitivity** | **87.7%** |
+| Model architectures compared | 5 |
+| Probability calibration | Isotonic |
+| Explainability | SHAP |
+| Evaluation | Recorded independent holdout |
+
+The trained risk-prediction pipeline achieved **0.809 ROC-AUC and 87.7% sensitivity** at the selected clinical screening threshold.
+
+### 3.4 SHAP explainability
+
+NeoGuard provides interpretable explanations for each risk prediction using SHAP-based feature contributions.
+
+The application displays:
+
+- Principal risk drivers.
+- Relative feature contributions.
+- Factors increasing predicted risk.
+- Factors decreasing predicted risk.
+- Patient-specific risk explanations.
+
+This makes the prediction process more transparent and supports interpretation of model-generated risk estimates.
 
 ---
 
-## User Workflow
+## 4. Clinical Decision-Support Application
 
-### Step 1 — Clinical Data Entry
+NeoGuard is implemented as a Flutter-based mobile application supported by a FastAPI backend.
 
-Healthcare professionals enter structured maternal, neonatal, and laboratory information.
+### Clinical data entry
 
-**Maternal parameters:** gestational age · maternal temperature · duration of rupture of membranes · GBS status · intrapartum antibiotic administration · suspected chorioamnionitis / intra-amniotic infection · mode of delivery · multiple pregnancy · maternal infection history · relevant laboratory investigations
+Clinicians enter structured maternal, neonatal, and laboratory parameters through a dedicated assessment interface.
 
-**Neonatal parameters:** birth weight · Apgar scores · respiratory status · oxygen requirement · need for respiratory support · feeding difficulties · temperature instability · lethargy · perfusion abnormalities · hypoglycaemia · seizures
+### Risk stratification
 
-**Laboratory parameters:** complete blood count · CRP · procalcitonin · blood gas analysis · blood culture results · serial laboratory trends
+The ML engine produces:
 
-### Step 2 — Risk Assessment
+- Individualized EOS risk estimates.
+- Risk categories.
+- Ranked contributing features.
+- SHAP-based explanations.
 
-The ML Risk Assessment Engine (above) computes an individualised probability of EOS, a risk category, and a SHAP-based driver breakdown.
+### Longitudinal patient history
 
-### Step 3 — Clinical Outputs
+NeoGuard maintains historical assessments to support repeated risk evaluation as clinical information changes.
 
-The platform generates:
+The timeline subsystem tracks:
 
-**Risk score** — e.g. *"Estimated EOS Risk: 2.1 per 1000 live births"*
+- Previous risk scores.
+- Changes in risk categories.
+- Laboratory trajectories.
+- Respiratory and clinical status.
+- Deteriorating or improving trends.
+- Patient-specific changes across assessments.
 
-**Risk category** — Low · Intermediate · High · Critical
+### Personalized care plans
 
-**Recommended actions** — e.g. routine observation, enhanced monitoring, blood culture, serial laboratory investigations, empirical antibiotic therapy, NICU admission
+Based on clinical requirements defined with clinician input, NeoGuard generates a structured **13-section clinical care-plan framework** covering:
 
-**Clinical summary** — e.g. *"The infant demonstrates increased EOS risk due to maternal pyrexia, prolonged rupture of membranes and evolving respiratory distress. Current evidence supports blood culture sampling and consideration of empirical antibiotic therapy."*
-
-### Step 4 — Continuous Reassessment
-
-Risk prediction evolves throughout the infant's clinical course as new information arrives — repeat clinical examination findings, oxygen requirements, feeding tolerance, and serial CRP/procalcitonin/culture trends all feed back into a fresh assessment, rather than the static, birth-only estimate produced by traditional calculators.
-
----
-
-## Patient Timeline & Longitudinal Record Maintenance
-
-Continuous reassessment (above) requires the platform to actually **maintain a longitudinal record per patient**, not just process one assessment in isolation. This is a dedicated subsystem spanning frontend and backend:
-
-- **Timeline UI**: a dedicated patient timeline screen renders every historical assessment for an encounter in chronological order — score, category, and captured parameters at each point — so a clinician can see the trajectory, not just the current snapshot.
-- **Two deliberately separate data representations**, built from the same assessment history:
-  - A **compact trend summary** for retrieval queries — short phrases like *"CRP rising 3 consecutive readings"* or *"AKI stage 1"* — kept intentionally terse because diluting a search query with a paragraph of raw history measurably hurts retrieval quality.
-  - A **full history summary** (up to the last 10 assessments, every captured field per entry) for LLM generation prompts, where more context genuinely helps the model narrate a real trajectory instead of a generic one.
-- **Streak-aware trend computation**: rather than comparing only the last two readings, the system walks the full history backward to compute genuine streaks — consecutive CRP-rising readings, consecutive temperature-instability readings, and the current score direction (deteriorating / improving / stable) with its own streak length — surfaced both in the UI as a trend chip and fed into retrieval/generation.
-- **Delta-aware clinical safety checks**: AKI staging (used by the nephrotoxicity contraindication check) is computed from a dedicated assessment-deltas view over the full history — including an explicit, documented limitation that a patient's very first-ever reading can never trigger a rise-based flag, since there's nothing yet to compare it against.
-- **Offline-safe**: timeline data is cached locally so the history remains viewable without connectivity, consistent with the platform's offline-first design.
-
-## De-identification & Privacy
-
-No personally identifying information ever leaves the clinician's device as part of an AI request. A dedicated de-identification layer sits between the patient record and every backend/RAG/LLM call:
-
-- A structured `DeidentifiedPatient` representation strips names, MRNs, and any other direct identifiers before a risk payload is built — only clinical parameters (gestational age, temperatures, labs, respiratory/perfusion status, birth weight, etc.) are transmitted.
-- This applies uniformly across **every** AI-facing endpoint — risk explanation, care-plan generation, and evidence retrieval all operate exclusively on the de-identified payload, never on the underlying patient record.
-- De-identification coverage is kept in lockstep with the clinical parameter set itself: when new fields are captured in the app (e.g. birth weight, care setting), they're added to both the local patient model and the de-identified payload together, so nothing captured on-device is silently missing from — or silently leaking beyond — what the AI layer is allowed to see.
-- Positions the platform to meet HIPAA/GDPR-style data-minimisation requirements by construction, not as an after-the-fact compliance pass (see [Technical Stack](#technical-stack)).
+- Clinical and developmental summary.
+- Risk interpretation.
+- Immediate clinical actions.
+- Antibiotic management.
+- Laboratory investigations.
+- Monitoring.
+- Escalation criteria.
+- Risk-driver explanations.
+- Guideline evidence.
+- Nutrition and fluid considerations.
+- Parent communication.
+- Contraindication and ambiguity handling.
+- Longitudinal changes.
 
 ---
 
-## Explainable AI
+## 5. Privacy-Preserving Architecture
 
-Transparency is a first-class design goal, not an add-on. Every prediction ships with:
+NeoGuard incorporates privacy safeguards into its clinical data pipeline.
 
-- **Key risk drivers**, ranked by contribution
-- **Relative contribution** of each variable (SHAP-based)
-- **Confidence level** of the prediction
-- **Factors increasing risk** — e.g. maternal fever, prolonged rupture of membranes, positive GBS status, respiratory distress, laboratory abnormalities
-- **Factors reducing risk** — e.g. adequate intrapartum antibiotics, well-appearing infant, normal serial examinations
-- **Evidence supporting each recommendation**, traceable to a specific guideline passage
+Implemented design features include:
 
-SHAP explainability is implemented across every candidate model architecture in the benchmark, and maps directly into the app's existing risk-driver visualisation (waterfall chart, per-driver detail screen) — clinicians see not just *what* the risk is, but *why*.
+- Schema-validated client-side de-identification.
+- Removal of direct patient identifiers before AI processing.
+- Server-side PHI rejection.
+- Structured AI-facing clinical payloads.
+- Separation of patient identity from model inference data.
+- Offline-capable components and local caching.
 
----
-
-## Data Engineering & Guideline Ingestion Pipeline
-
-The RAG layer's evidence base doesn't come from raw PDFs dumped into a vector store — it's built through a dedicated ingestion pipeline that turns messy clinical PDFs into clean, structured, citable chunks:
-
-- **Structure-aware PDF extraction**: uses real typography metadata (font size, weight, per-line positioning) rather than regex-only heuristics, so heading detection reflects how the document actually presents itself; tables are extracted and kept structurally separate so they can be serialized as clean key:value prose instead of being flattened into noise.
-- **Noise removal**: front-matter pages (ISBN/copyright/licensing/contributors), tables of contents, and repeated running headers/footers are detected and stripped — running headers/footers via cross-page frequency analysis of normalized text, not a fixed keyword list.
-- **Paragraph reconstruction before filtering**: PDF line-wraps are rejoined into real paragraphs *before* any length-based filtering runs — an ordering fix for a real bug class where naive short-line filters silently discard most genuine content, since wrapped PDF lines are typically 30–50 characters.
-- **Content-based document classification**: source guideline, region, and version/era metadata are inferred by sniffing document content with a confidence score, rather than trusting filenames.
-- **Configurable chunking strategies**: fixed-size, semantic, proposition-level, and a custom clinical-structure-aware adaptive strategy — selectable per-ingestion run to support retrieval-quality ablation experiments.
-- **Vector index management**: embeddings generated at ingestion time, stored in Postgres via `pgvector`, with a dedicated rebuild path for the IVFFlat approximate-nearest-neighbour index after bulk re-ingestion.
+The system is designed around healthcare data minimization principles. Formal regulatory compliance and production security certification remain separate validation requirements.
 
 ---
 
-## Evidence & Literature Integration (RAG Pipeline)
+## 6. Guideline Ingestion and Knowledge Engineering
 
-The platform uses Retrieval-Augmented Generation to ground every recommendation in real, citable guideline text, drawn from:
+The RAG corpus is built from clinical guidelines and related evidence sources.
 
-- NICE Neonatal Infection Guidelines (NG195)
-- American Academy of Pediatrics recommendations
-- WHO guidance
-- Peer-reviewed neonatal sepsis literature (EOSCAL cohort studies)
-- Locally uploaded institutional protocols
+### Guideline sources
 
-### How retrieval works
+- **NICE NG195** — Neonatal infection guidance.
+- **AAP** — American Academy of Pediatrics EOS recommendations.
+- **AAP_PRETERM** — Preterm-focused recommendations.
+- **WHO** — Young-infant serious bacterial infection guidance.
 
-- **Hybrid search**: BM25 (lexical) + dense semantic embeddings, merged via Reciprocal Rank Fusion, then cross-encoder reranked with MMR diversity to avoid returning near-duplicate passages
-- **Patient-aware querying**: a structured query is built from the full clinical parameter set (not just headline symptoms), enriched with streak-aware trend descriptors from prior assessments (e.g. *"CRP rising 3 consecutive readings"*) when a patient's history is available
-- **Clinical synonym expansion**: a curated vocabulary layer bridges plain clinical phrasing and formal guideline wording (e.g. "newborn blood infection" ↔ "early-onset neonatal sepsis")
-- **Multi-guideline support**: the active guideline (NICE / AAP / WHO / local institutional) is a soft reranking preference, never a hard filter — the full corpus stays searchable, so a fact missing from one guideline can still be found and cited from another
-- **Chunk → full section reassembly**: retrieved fragments are reassembled into complete guideline sections (not shown as disconnected snippets), with the specific matched passages highlighted in context
-- **Direct source jump**: every citation carries file and page metadata, opening directly in an in-app PDF viewer at the exact highlighted passage
+The broader application also supports integrating additional literature and institutional protocols.
 
----
+### Ingestion pipeline
 
-## Clinical Explanation Generation
+```text
+Clinical Guideline PDFs
+           |
+           v
+Structure-Aware Extraction
+           |
+           v
+Noise and Header/Footer Removal
+           |
+           v
+Paragraph Reconstruction
+           |
+           v
+Section and Table Processing
+           |
+           v
+Clinical-Aware Chunking
+           |
+           v
+Metadata + Source Attribution
+           |
+           v
+Embedding Generation
+           |
+           v
+PostgreSQL / pgvector
+           |
+           v
+Searchable Guideline Evidence
+```
 
-Triggered from **"View Clinical Explanation"** — a lighter-weight, single-pass flow for explaining a specific risk result:
+The ingestion system supports fixed-size, semantic, proposition-level, and clinically structured chunking strategies.
 
-1. Evidence retrieved and labeled with short citation tags (`E1`, `E2`, …) — never raw internal identifiers
-2. A generator LLM produces a clinical summary, a per-driver explanation for each risk factor, recommended actions, and an evidence summary — every specific claim required to cite its evidence label
-3. Output is sanitised — any hallucinated citation ID is dropped, any stray raw identifier the model prints anyway is rewritten back to a proper citation tag
-4. A fact-checking judge LLM runs (for High/Critical risk) and flags unsupported claims for clinician review
-5. If no LLM provider is reachable, a fully deterministic, evidence-linked fallback explanation is generated instead — always clearly labeled as such
-
----
-
-## Care Plan Generation
-
-Triggered from **"AI Care Plan"** — a structured, 13-section management plan, generated and verified through a deeper, iterative pipeline:
-
-**Sections**: patient development summary (with trend across prior assessments) · immediate actions · antibiotic plan (with explicit conditional branches for culture-negative / culture-positive / labs-unavailable pathways) · monitoring schedule · escalation criteria · driver breakdown · guideline sources · nutrition & fluid plan · parent communication notes · disambiguation notes · contraindication flags · trend-state change
-
-### Retrieve-first, default-last
-
-Sections that used to be static hardcoded content (monitoring schedule, escalation criteria, nutrition/fluid guidance) are now actively grounded: the system first checks already-retrieved evidence prioritising the active guideline, then runs several genuinely distinct widened searches (including across other guidelines) if nothing is found, and only falls back to a clearly-labeled standard-practice default after retrieval has been legitimately exhausted.
-
-### Deterministic clinical safety nets
-
-Independent of the LLM layer, deterministic rule checks run on every plan:
-
-- Penicillin-allergy substitution logic
-- KDIGO-staged AKI nephrotoxicity checks (real staged criteria, not a flat threshold)
-- Antibiotic regimen completeness — flags a first-line agent present without its expected partner
-- Cross-guideline conflict detection with explicit disclosure to the clinician
+Metadata preserves guideline identity, source location, section information, and chunk identifiers for evidence traceability.
 
 ---
 
-## Multi-Agent Trustworthiness Layer
+## 7. Retrieval-Augmented Generation
 
-This is the core of how NeoGuard AI keeps generated clinical content grounded rather than hallucinated:
+NeoGuard's retrieval engine combines several complementary information-retrieval techniques.
 
-- **Generator agent** drafts the explanation or care plan, citing every specific claim to a retrieved evidence passage
-- **Judge agent** is architecturally independent — a separate prompt and call, explicitly told it did not author the draft — and cross-checks specific factual claims (drug doses, thresholds, causal statements) against the deterministic risk result and the retrieved evidence, distinguishing material checkable claims from reasonable stylistic synthesis
-- **Resolution agent** (Care Plan only) takes whatever the judge flags and actively tries to fix it — re-running retrieval, not restricted to the active guideline — before ever reaching for a hardcoded, transparently-labeled default; it then re-invokes the judge to re-verify, looping until clean or until a bounded number of attempts is exhausted
-- **Shared citation registry** assigns stable evidence labels across an entire generation run, including chunks discovered only during the resolution loop, so every citation the clinician can see — no matter which stage produced it — resolves to a real, verifiable source
+### Sparse retrieval
+
+BM25-based lexical retrieval is used to identify passages containing relevant clinical terms and exact terminology.
+
+### Dense retrieval
+
+Embedding-based retrieval identifies evidence based on semantic similarity.
+
+### Vector retrieval
+
+A separate vector-search configuration provides an additional semantic retrieval baseline.
+
+### Graph retrieval
+
+Graph retrieval uses structured relationships between guideline evidence and clinical recommendations.
+
+### Custom Vector–Graph Hybrid
+
+The custom Hybrid combines vector-based evidence retrieval with graph-oriented retrieval signals.
+
+The broader retrieval architecture incorporates:
+
+- **Reciprocal Rank Fusion (RRF)** to combine ranked candidate sets.
+- **Cross-encoder reranking** for more detailed query–evidence relevance assessment.
+- **Maximal Marginal Relevance (MMR)** to improve evidence diversity.
+- **Clinical synonym expansion** to bridge terminology differences.
+- **Guideline-aware ranking** to prioritize applicable evidence.
+- **Context expansion** to recover related evidence beyond isolated chunks.
+
+These techniques form the primary retrieval-engineering contribution of NeoGuard.
 
 ---
 
-## Clinical Evidence Search Tab
+## 8. Multi-Agent Verification Architecture
 
-A standalone exploration tool over the same guideline corpus, for clinicians who want to search the literature directly rather than review a generated plan:
+NeoGuard uses functionally separated generation, fact-checking, and resolution stages.
 
-- Free-text or patient-context-biased search over the full multi-guideline corpus
-- Retrieved chunks reassembled into complete, readable guideline sections with matched passages highlighted
-- Optional AI overview and per-passage summary cards, always shown alongside — never in place of — the real underlying text
-- Every result opens directly to its exact page in-app
-- Offline fallback to a bundled local corpus when connectivity is unavailable
+### Generator agent
+
+Produces a personalized clinical care plan using:
+
+- Predicted risk.
+- SHAP risk drivers.
+- Patient history.
+- Active guideline context.
+- Retrieved evidence.
+
+### Fact-checking agent
+
+Reviews generated claims against the available evidence.
+
+It checks:
+
+- Citation grounding.
+- Unsupported statements.
+- Antibiotic recommendations.
+- Numeric drug dosages.
+- Guideline consistency.
+- Contraindication handling.
+
+### Resolution agent
+
+Attempts to correct flagged issues through targeted evidence retrieval and iterative revision.
+
+```text
+Generated Clinical Plan
+          |
+          v
+     Fact-Check Judge
+          |
+          v
+   Unsupported Claims?
+          |
+          v
+    Targeted Retrieval
+          |
+          v
+     Resolution Agent
+          |
+          v
+       Reverification
+          |
+          v
+ Deterministic Safety Checks
+          |
+          v
+       Final Care Plan
+```
+
+### Deterministic safety checks
+
+Safety-oriented controls address:
+
+- Regimen completeness.
+- Allergy-related recommendations.
+- Renal and nephrotoxicity considerations.
+- Unsupported numeric doses.
+- Cross-guideline conflicts.
+- Explicit fallback disclosure.
+
+The Multi-Agent results measure the complete verification-and-resolution pipeline, not the isolated effect of any single agent.
 
 ---
 
-## How This Differs From Existing EOS Calculators
+# 9. Research Evaluation
 
-| | Traditional calculators (e.g. Kaiser Permanente EOS Calculator) | NeoGuard AI |
+NeoGuard follows a three-tier evaluation methodology.
+
+| Tier | Evaluation | Objective |
 |---|---|---|
-| Risk model | Fixed prediction model | Trained, calibrated, retrainable ML model |
-| Risk factors | Predominantly maternal/perinatal | Maternal, neonatal, and laboratory, with trend data |
-| Update cadence | Static estimate at birth | Continuously reassessed as new data arrives |
-| Explanation | Limited | Full SHAP-based driver breakdown |
-| Evidence synthesis | None | Real-time RAG over NICE/AAP/WHO/local literature |
-| Guideline support | Single, fixed | Multi-guideline, locally extensible |
-| Trust verification | None | Independent LLM judge + iterative resolution agent |
+| **Tier 1** | Exact Retrieval | Measure designated evidence ranking and grounding |
+| **Tier 2** | LLM-Assisted Semantic Evaluation | Measure semantic relevance and evidence utility |
+| **Tier 3** | LLM-Based Clinical Usability | Assess the quality, completeness, and safety of generated plans |
+
+Automatic generation metrics and Multi-Agent verification are evaluated separately as downstream components.
+
+### Experimental cohorts
+
+| Component | Evaluation cohort |
+|---|---|
+| ML risk prediction | Independent holdout |
+| Tier 1 — Exact retrieval | **100 cases × 5 arms** |
+| Tier 2 — LLM semantic retrieval | Initial 30-case cohort |
+| Tier 3 — LLM clinical usability | Previously reported 30-case cohort |
+| Generation | 30 Dense + 30 Hybrid outputs |
+| Multi-Agent | Dense-MA and Hybrid-MA, 30 cases each |
+
+The first-phase results and expanded retrieval rerun are not combined into one artificial benchmark.
 
 ---
 
-## Technical Stack
+# 10. Tier 1 — Exact Retrieval Evaluation
 
-- **Frontend**: Flutter (iOS + Android), Riverpod state management, offline-first architecture with local caching for guideline PDFs and pre-synthesized protocols
-- **Backend**: Python / FastAPI
-- **Database**: Supabase (Postgres) with `pgvector` for embedding storage
-- **ML risk engine**: scikit-learn / XGBoost-class models, isotonic calibration, SHAP explainability, `joblib` deployment; distilled on-device variant with closed-form explanations and no ML runtime
-- **AI/LLM layer**: multi-provider chain (local Ollama/vLLM → Gemini → Groq) with automatic failover to a deterministic rule-based fallback if every provider is unavailable
-- **RAG**: hybrid BM25 + semantic retrieval, Reciprocal Rank Fusion, cross-encoder reranking, MMR diversity
-- **Security/compliance**: designed for HIPAA/GDPR-compliant cloud infrastructure
+Five architectures were benchmarked using 100 structured neonatal EOS cases.
+
+## Exact-ID ranking
+
+| Retrieval Arm | Exact-ID MRR@10 | Reported NDCG@10* |
+|---|---:|---:|
+| Dense | 0.491 | 0.609 |
+| Sparse | 0.613 | 0.665 |
+| Vector | 0.547 | 0.630 |
+| **Graph** | **0.809** | **0.795** |
+| Hybrid | 0.805 | 0.778 |
+
+**Graph achieved the strongest reported exact evidence-ranking performance:**
+
+- **Exact-ID MRR@10: 0.809**
+- **Retrieved-hit-normalized NDCG@10: 0.795**
+
+Hybrid followed closely with **MRR@10 = 0.805**.
+
+
+
+## Anchor-grounding recall
+
+Anchor phrases represent case-specific clinical evidence concepts, including risk factors, antimicrobial recommendations, blood cultures, monitoring, referral, and treatment duration.
+
+| Retrieval Arm | Anchor-Grounding Recall |
+|---|---:|
+| Dense | 0.834 |
+| Sparse | 0.821 |
+| Vector | 0.813 |
+| **Graph** | **0.859** |
+| Hybrid | 0.837 |
+
+**Graph achieved the highest anchor-grounding recall at 0.859.**
+
+This suggests strong recovery of predefined clinically relevant evidence concepts.
+
+
+
+# 11. Tier 2 — LLM-Assisted Semantic Retrieval Evaluation
+
+Exact chunk IDs do not always capture semantic equivalence or clinical evidence utility.
+
+NeoGuard therefore uses an **LLM-as-a-Judge framework** to evaluate retrieved evidence beyond exact gold-chunk matching.
+
+The initial semantic evaluation recorded:
+
+- **1,500 retrieved chunk positions**
+- **831 exact gold-evidence misses**
+
+### Evaluation criteria
+
+The judge assesses:
+
+- Clinical relevance.
+- Guideline alignment.
+- Scenario applicability.
+- Evidence sufficiency.
+- Semantic equivalence.
+- Useful non-gold evidence.
+- Redundancy.
+- Safety relevance.
+
+## Initial LLM-as-Judge results
+
+| Retriever | Semantic Recall@10 | Utility Precision@10 | Semantic MRR | Semantic NDCG@10 |
+|---|---:|---:|---:|---:|
+| Dense | 0.335 | **0.820** | 0.820 | 0.877 |
+| Sparse | 0.322 | 0.717 | 0.803 | 0.849 |
+| Vector | 0.348 | 0.760 | 0.812 | 0.885 |
+| Graph | 0.456 | 0.740 | 0.850 | 0.886 |
+| **Hybrid** | **0.504** | 0.807 | **0.950** | **0.913** |
+
+### Key results
+
+Hybrid achieved the strongest recorded:
+
+- **Semantic Recall@10: 0.504**
+- **Semantic MRR: 0.950**
+- **Semantic NDCG@10: 0.913**
+
+Dense obtained the highest utility precision at **0.820**.
+
+The findings indicate that exact chunk identity and semantic evidence usefulness are distinct evaluation dimensions.
+
+**These are historical LLM-assisted results from the initial 30-case cohort, not newly computed scores on the 100-case benchmark.**
 
 ---
 
-## Technical Competencies Demonstrated
+# 12. Tier 3 — LLM-Based Clinical Usability Evaluation
 
-Grounded strictly in what's actually implemented above — no cluster item below is listed unless a corresponding section of this document describes it.
+The third evaluation layer assesses the **quality and clinical usability of generated care plans**.
 
-**Core AI/ML**: trained/calibrated/benchmarked ML risk model, dual feature-selection methodology (Lasso + Boruta), leakage auditing, isotonic calibration with prevalence correction, five-architecture model benchmarking, independent holdout evaluation.
+This analysis is explicitly labeled:
 
-**NLP / LLM & Retrieval-Augmented Generation**: hybrid BM25 + semantic retrieval, Reciprocal Rank Fusion, cross-encoder reranking, MMR diversity, configurable document chunking strategies, clinical synonym/vocabulary expansion, structured + LLM-based query construction, multi-guideline evidence retrieval, prompt design for citation-constrained generation.
+**LLM-Based Clinical Usability Assessment — Not Independent Clinician Validation**
 
-**Agentic AI / Multi-Agent Systems**: an architecturally independent generator/judge agent pair, an iterative resolution agent that autonomously re-searches and re-verifies rather than stopping at the first fact-check failure, and a shared citation-registry mechanism coordinating state across the whole multi-step agent run.
+## Evaluation dimensions
 
-**Trustworthy & Explainable AI**: LLM-as-judge fact-checking against retrieved evidence, hallucination/unsupported-claim mitigation via retrieve-first-default-last correction logic, SHAP-based model explainability, deterministic (non-LLM) clinical safety nets running independently of the generative layer, transparent labeling whenever a fallback (rather than grounded evidence) is used.
+Generated plans are assessed using a 1–5 rubric covering:
 
-**Data Engineering**: PDF structure extraction using typography metadata, noise/boilerplate removal, paragraph reconstruction, content-based document classification, configurable ingestion pipeline, vector index construction and rebuild.
+1. Faithfulness and groundedness.
+2. Citation correctness.
+3. Citation completeness.
+4. Clinical correctness.
+5. Clinical completeness.
+6. Clinical utility.
+7. Safety.
 
-**Data Science**: leakage auditing via dual-method feature-importance cross-checking, external-cohort calibration validation, dynamic stratified data splitting, NLG evaluation metrics (METEOR, BERTScore, RAGAS, BLEU).
+Additional evaluations address unsupported claims, contradictions, and critical omissions.
 
-**Software / Mobile Engineering**: cross-platform Flutter frontend, offline-first architecture (local PDF/protocol caching, graceful degradation without connectivity), FastAPI backend, Postgres/`pgvector` database design, REST API integration, multi-provider LLM failover chain.
+## Previously reported LLM-based usability results
 
-**Privacy / Security-Oriented Engineering**: structured de-identification layer enforced at every AI-facing boundary, data-minimisation-by-construction design.
+| Metric | Dense | Hybrid |
+|---|---:|---:|
+| Faithfulness / Groundedness | **3.884** | 3.785 |
+| Citation Correctness | **3.576** | 3.462 |
+| Citation Completeness | **4.068** | 4.017 |
+| Clinical Correctness | **3.975** | 3.924 |
+| Clinical Completeness | **4.290** | 4.224 |
+| Clinical Utility | **4.132** | 4.074 |
+| **LLM-Rated Safety** | 4.873 | **5.000** |
+| Unsupported-Claim Rate | 6.7% | **0%** |
+| Contradiction Rate | 0% | 0% |
+| Critical-Omission Rate | 6.7% | **0%** |
 
-**HCI / Explainability UX**: interactive risk-driver visualisation (waterfall chart, per-driver detail view), hover/tap evidence-citation interaction with direct jump-to-source-page navigation, patient timeline visualisation, offline-state UI affordances.
+*These values are from the previously reported LLM-judge analysis. The corresponding case-level judgment records should be independently audited before treating the aggregates as final publication evidence.*
+
+### Main findings
+
+Dense achieved slightly higher scores in several general content-quality dimensions.
+
+Hybrid achieved the strongest reported safety-oriented outcomes:
+
+- **5.0/5 LLM-rated safety**
+- **0% unsupported-claim cases**
+- **0% contradictions**
+- **0% critical-omission cases**
+
+These results suggest a distinction between general generation quality and safety-oriented performance.
+
+An automated LLM safety score does not demonstrate real-world clinical safety.
+
+## Guideline-specific clinical usability
+
+| Guideline | Arm | Clinical Correctness | Clinical Completeness | Clinical Utility | Safety |
+|---|---|---:|---:|---:|---:|
+| AAP | Dense | **4.000** | **4.257** | **4.129** | 5.000 |
+| AAP | Hybrid | 3.892 | 4.207 | 4.049 | 5.000 |
+| NICE | Dense | **4.080** | **4.327** | **4.204** | 5.000 |
+| NICE | Hybrid | 3.921 | 4.224 | 4.072 | 5.000 |
+| WHO | Dense | 3.791 | **4.258** | 4.025 | 4.578 |
+| WHO | Hybrid | **3.955** | 4.237 | **4.096** | **5.000** |
+
+The recorded WHO subgroup results favor Hybrid on clinical correctness, utility, and safety. Dense remains competitive or slightly stronger in several AAP/NICE dimensions.
 
 ---
 
-## Evaluation Methodology
+# 13. Generation Evaluation
 
-**ML Risk Model**: independent holdout evaluation (AUC 0.809, 87.7% sensitivity), calibration cross-validated against an external published cohort (Kainth et al., BMJ Paediatrics Open 2026), dual-method leakage audit (Lasso + Random Forest importance).
+The initial care-plan generation experiment evaluated Dense and Hybrid over **30 cases per arm**.
 
-**RAG / LLM pipeline**: a stratified golden vignette evaluation set spanning multiple clinical risk strata, a dedicated retrieval-quality ablation harness for chunking/retrieval configuration comparisons, and care-plan generation quality scored with METEOR, BERTScore, RAGAS, and BLEU.
+## Automatic generation metrics
+
+| Metric | Dense | Hybrid |
+|---|---:|---:|
+| METEOR | **0.431** | 0.423 |
+| BLEU | **0.172** | 0.162 |
+| BLEU-1 | **0.473** | 0.469 |
+| BLEU-2 | **0.311** | 0.302 |
+| BERTScore RoBERTa-large F1 | **0.870** | 0.869 |
+| BERTScore DistilBERT F1 | **0.845** | 0.842 |
+| Anchor-Grounding Recall | **0.636** | 0.629 |
+
+The generated plans achieved similar BERTScore values, indicating close semantic alignment with their reference plans.
+
+These automatic metrics measure reference similarity, not clinical correctness.
+
+## Safety-oriented outcomes
+
+| Metric | Dense | Hybrid |
+|---|---:|---:|
+| Regimen-Incomplete Cases | 6.7% | **0%** |
+| Ungrounded-Dose Cases | 3.3% | **0%** |
+| Cross-Guideline Conflicts | 0% | 0% |
+
+**Hybrid recorded 0% incomplete antibiotic regimens and 0% ungrounded drug dosages in the evaluated cohort.**
 
 ---
 
-## Deployment
+# 14. Multi-Agent Verification Results
 
-- **Backend inference**: calibrated ML model + full SHAP computation, served behind a dedicated risk-assessment API endpoint
-- **On-device inference**: distilled logistic-regression model with closed-form explainability, zero ML-runtime dependency, for offline operation
-- **LLM generation**: local-first provider chain (Ollama/vLLM) with cloud fallback (Gemini, then Groq), and a final deterministic rule-based fallback if no provider is reachable
+The Multi-Agent experiment compares Dense-MA with Hybrid-MA.
+
+| Metric | Dense-MA | Hybrid-MA |
+|---|---:|---:|
+| Fact-Check Verified | 86.7% | 86.7% |
+| Mean Fact-Check Confidence | 0.837 | 0.837 |
+| Mean Resolution Steps | 3.00 | **2.27** |
+| Regimen-Incomplete Cases | 6.7% | **0%** |
+| Ungrounded-Dose Cases | 3.3% | **0%** |
+
+### Key results
+
+Hybrid-MA recorded:
+
+- **0% incomplete antibiotic regimens**
+- **0% ungrounded-dose cases**
+- **2.27 average resolution steps**
+
+Compared with Dense-MA, the Hybrid-based pipeline reduced resolution effort while maintaining the same 86.7% verification rate.
+
+These improvements are associated with the complete retrieval, verification, resolution, and deterministic-safety workflow.
 
 ---
 
-## Scope & Limitations
+# 15. First-Phase Research Summary
 
-- The current ML risk model is trained on a **synthetic neonatal sepsis dataset**, used to validate the full pipeline architecture (feature selection, calibration, explainability, dual deployment) end-to-end. Retraining on real patient data is the next milestone — expect performance numbers to shift once that happens; this is expected, and is exactly why the calibration *methodology* (already validated against a real external cohort) matters more long-term than the current specific AUC figure.
-- `risk_category` thresholds are pending formal clinical sign-off before any production deployment.
-- Lab features (WBC, CRP) are scaffolded in preprocessing but not yet part of the active feature set — awaiting richer serial lab data collection.
+The first research phase established the feasibility of an integrated explainable ML and evidence-grounded Agentic RAG framework for neonatal EOS.
+
+| Research Area | Reported Result |
+|---|---|
+| ML risk prediction | **0.809 ROC-AUC** |
+| Screening sensitivity | **87.7%** |
+| Explainability | SHAP |
+| Retrieval architectures | 5 evaluated |
+| Graph exact ranking | **0.809 MRR@10** (expanded benchmark) |
+| Graph anchor grounding | **0.859 Recall** (expanded benchmark) |
+| Hybrid semantic ranking | **0.950 MRR** (initial evaluation) |
+| Hybrid semantic NDCG | **0.913** (initial evaluation) |
+| Hybrid section precision | **0.598** (expanded benchmark) |
+| Hybrid regimen incompleteness | **0% observed** |
+| Hybrid ungrounded dosage | **0% observed** |
+| Multi-Agent resolution steps | **2.27** |
+| Hybrid LLM-rated safety | **5.0/5**, previously reported |
+
+The project demonstrates the integration of risk modeling, information retrieval, LLM reasoning, explainability, and automated verification.
 
 ---
 
-## Roadmap
+# 16. Technical Stack
 
-**Risk model**
-1. Retrain on real serial/longitudinal patient data
-2. Incorporate additional app-collected fields (GBS status, procalcitonin, blood gas, etc.) once available
-3. Clinical sign-off on `risk_category` thresholds
-4. Prospective clinical validation
-5. Temporal trend features (deltas/slopes across serial assessments) to fully realise dynamic, continuously-updating risk assessment
+| Layer | Technologies |
+|---|---|
+| Mobile Frontend | Flutter, Dart, Riverpod |
+| Backend | Python, FastAPI |
+| Database | Supabase, PostgreSQL |
+| Vector Database | pgvector |
+| ML | XGBoost, Gradient Boosting, SVM, Random Forest, scikit-learn |
+| Explainability | SHAP |
+| Calibration | Isotonic Regression |
+| LLMs | Ollama, vLLM, Groq, Gemini |
+| RAG | LlamaIndex, BM25, Dense/Vector Retrieval, Graph Retrieval |
+| Fusion | Reciprocal Rank Fusion |
+| Reranking | Cross-Encoder |
+| Diversity | Maximal Marginal Relevance |
+| Evaluation | MRR, NDCG, BLEU, METEOR, BERTScore, LLM-as-Judge |
+| Privacy | Client-Side De-identification, Schema Validation, PHI Rejection |
 
-**Platform**
-1. Expand from the Neonatology module into the two remaining planned modules of the integrated paediatric platform: **Paediatric Cardiology** and **Community Paediatrics**
-2. Multicentre data collection to support advanced ML development: culture-positive sepsis prediction, severe sepsis prediction, mortality prediction, NICU admission prediction, and antibiotic optimisation pathways
+---
+
+
+# 17. Limitations
+
+NeoGuard is a research prototype and is not independently clinically validated.
+
+Important limitations include:
+
+- Retrieval benchmarks use simulated or curated clinical cases.
+- LLM-as-Judge evaluation is not clinical ground truth.
+- LLM-rated safety is not proof of clinical safety.
+- Automated text metrics do not measure independent clinical correctness.
+- Multi-Agent improvements are measured for the complete pipeline rather than isolated agents.
+- Independent clinician assessment and prospective clinical evaluation are still required.
+
+The system is intended for research and clinician-supervised decision support, not autonomous diagnosis or treatment.
+
+
+
+
+---
+
+**Disclaimer:** NeoGuard is a research prototype. Its outputs are not intended to replace qualified clinical judgment or validated medical protocols.
